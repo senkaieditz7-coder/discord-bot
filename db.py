@@ -1,28 +1,35 @@
 import os
+import asyncio
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 DB_URL = os.environ.get("SUPABASE_DB_URL")
+_executor = ThreadPoolExecutor(max_workers=5)
 
 
-def get_conn():
+def _get_conn():
     conn = psycopg2.connect(DB_URL)
     conn.autocommit = False
     return conn
 
 
-def init_db():
-    conn = get_conn()
-    c = conn.cursor()
+def _run(func):
+    """Run a synchronous db function in a thread executor."""
+    loop = asyncio.get_event_loop()
+    return loop.run_in_executor(_executor, func)
 
+
+def init_db():
+    conn = _get_conn()
+    c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS config (
             key TEXT PRIMARY KEY,
             value TEXT
         )
     """)
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             id SERIAL PRIMARY KEY,
@@ -37,7 +44,6 @@ def init_db():
             transcript TEXT
         )
     """)
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS ticket_users (
             ticket_id INTEGER,
@@ -45,7 +51,6 @@ def init_db():
             PRIMARY KEY (ticket_id, user_id)
         )
     """)
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS vouches (
             id SERIAL PRIMARY KEY,
@@ -56,7 +61,6 @@ def init_db():
             created_at TEXT
         )
     """)
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS deposits (
             id SERIAL PRIMARY KEY,
@@ -69,7 +73,6 @@ def init_db():
             created_at TEXT
         )
     """)
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS blacklist (
             user_id TEXT,
@@ -80,7 +83,6 @@ def init_db():
             PRIMARY KEY (user_id, guild_id)
         )
     """)
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS automm_sessions (
             id SERIAL PRIMARY KEY,
@@ -99,7 +101,6 @@ def init_db():
             created_at TEXT
         )
     """)
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS confirmations (
             id SERIAL PRIMARY KEY,
@@ -114,7 +115,6 @@ def init_db():
             resolved_at TEXT
         )
     """)
-
     conn.commit()
     conn.close()
 
@@ -122,402 +122,472 @@ def init_db():
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def get_config(guild_id: str, key: str, default=None):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT value FROM config WHERE key=%s", (f"{guild_id}:{key}",))
-    row = c.fetchone()
-    conn.close()
-    return row["value"] if row else default
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT value FROM config WHERE key=%s", (f"{guild_id}:{key}",))
+        row = c.fetchone()
+        return row["value"] if row else default
+    finally:
+        conn.close()
 
 
 def set_config(guild_id: str, key: str, value: str):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO config (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
-        (f"{guild_id}:{key}", value)
-    )
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO config (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+            (f"{guild_id}:{key}", value)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_all_config(guild_id: str) -> dict:
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT key, value FROM config WHERE key LIKE %s", (f"{guild_id}:%",))
-    rows = c.fetchall()
-    conn.close()
-    prefix = f"{guild_id}:"
-    return {r["key"][len(prefix):]: r["value"] for r in rows}
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT key, value FROM config WHERE key LIKE %s", (f"{guild_id}:%",))
+        rows = c.fetchall()
+        prefix = f"{guild_id}:"
+        return {r["key"][len(prefix):]: r["value"] for r in rows}
+    finally:
+        conn.close()
 
 
 # ── Tickets ───────────────────────────────────────────────────────────────────
 
 def create_ticket(channel_id, guild_id, opener_id, ticket_type="trade"):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute(
-        "INSERT INTO tickets (channel_id, guild_id, opener_id, ticket_type, status, created_at) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-        (channel_id, guild_id, opener_id, ticket_type, "open", datetime.utcnow().isoformat())
-    )
-    tid = c.fetchone()["id"]
-    c.execute("INSERT INTO ticket_users (ticket_id, user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (tid, opener_id))
-    conn.commit()
-    conn.close()
-    return tid
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute(
+            "INSERT INTO tickets (channel_id, guild_id, opener_id, ticket_type, status, created_at) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+            (channel_id, guild_id, opener_id, ticket_type, "open", datetime.utcnow().isoformat())
+        )
+        tid = c.fetchone()["id"]
+        c.execute("INSERT INTO ticket_users (ticket_id, user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (tid, opener_id))
+        conn.commit()
+        return tid
+    finally:
+        conn.close()
 
 
 def get_ticket(channel_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT * FROM tickets WHERE channel_id=%s", (channel_id,))
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT * FROM tickets WHERE channel_id=%s", (channel_id,))
+        row = c.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def get_ticket_by_id(ticket_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT * FROM tickets WHERE id=%s", (ticket_id,))
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT * FROM tickets WHERE id=%s", (ticket_id,))
+        row = c.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def claim_ticket(channel_id, staff_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("UPDATE tickets SET claimed_by=%s WHERE channel_id=%s", (staff_id, channel_id))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE tickets SET claimed_by=%s WHERE channel_id=%s", (staff_id, channel_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def close_ticket(channel_id, transcript=""):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "UPDATE tickets SET status='closed', closed_at=%s, transcript=%s WHERE channel_id=%s",
-        (datetime.utcnow().isoformat(), transcript, channel_id)
-    )
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "UPDATE tickets SET status='closed', closed_at=%s, transcript=%s WHERE channel_id=%s",
+            (datetime.utcnow().isoformat(), transcript, channel_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def transfer_ticket(channel_id, new_mm_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("UPDATE tickets SET claimed_by=%s WHERE channel_id=%s", (new_mm_id, channel_id))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE tickets SET claimed_by=%s WHERE channel_id=%s", (new_mm_id, channel_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def add_ticket_user(channel_id, user_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT id FROM tickets WHERE channel_id=%s", (channel_id,))
-    row = c.fetchone()
-    if row:
-        c.execute("INSERT INTO ticket_users (ticket_id, user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (row["id"], user_id))
-        conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT id FROM tickets WHERE channel_id=%s", (channel_id,))
+        row = c.fetchone()
+        if row:
+            c.execute("INSERT INTO ticket_users (ticket_id, user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (row["id"], user_id))
+            conn.commit()
+    finally:
+        conn.close()
 
 
 def remove_ticket_user(channel_id, user_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT id FROM tickets WHERE channel_id=%s", (channel_id,))
-    row = c.fetchone()
-    if row:
-        c.execute("DELETE FROM ticket_users WHERE ticket_id=%s AND user_id=%s", (row["id"], user_id))
-        conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT id FROM tickets WHERE channel_id=%s", (channel_id,))
+        row = c.fetchone()
+        if row:
+            c.execute("DELETE FROM ticket_users WHERE ticket_id=%s AND user_id=%s", (row["id"], user_id))
+            conn.commit()
+    finally:
+        conn.close()
 
 
 def get_ticket_users(channel_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT id FROM tickets WHERE channel_id=%s", (channel_id,))
-    row = c.fetchone()
-    if not row:
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT id FROM tickets WHERE channel_id=%s", (channel_id,))
+        row = c.fetchone()
+        if not row:
+            return []
+        c.execute("SELECT user_id FROM ticket_users WHERE ticket_id=%s", (row["id"],))
+        users = c.fetchall()
+        return [u["user_id"] for u in users]
+    finally:
         conn.close()
-        return []
-    c.execute("SELECT user_id FROM ticket_users WHERE ticket_id=%s", (row["id"],))
-    users = c.fetchall()
-    conn.close()
-    return [u["user_id"] for u in users]
 
 
 def get_all_tickets(guild_id, status=None):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    if status:
-        c.execute("SELECT * FROM tickets WHERE guild_id=%s AND status=%s", (guild_id, status))
-    else:
-        c.execute("SELECT * FROM tickets WHERE guild_id=%s", (guild_id,))
-    rows = c.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        if status:
+            c.execute("SELECT * FROM tickets WHERE guild_id=%s AND status=%s", (guild_id, status))
+        else:
+            c.execute("SELECT * FROM tickets WHERE guild_id=%s", (guild_id,))
+        rows = c.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 # ── Vouches ───────────────────────────────────────────────────────────────────
 
 def add_vouch(from_user, to_user, guild_id, note=""):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO vouches (from_user, to_user, guild_id, note, created_at) VALUES (%s,%s,%s,%s,%s)",
-        (from_user, to_user, guild_id, note, datetime.utcnow().isoformat())
-    )
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO vouches (from_user, to_user, guild_id, note, created_at) VALUES (%s,%s,%s,%s,%s)",
+            (from_user, to_user, guild_id, note, datetime.utcnow().isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_vouches(user_id, guild_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT * FROM vouches WHERE to_user=%s AND guild_id=%s ORDER BY created_at DESC", (user_id, guild_id))
-    rows = c.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT * FROM vouches WHERE to_user=%s AND guild_id=%s ORDER BY created_at DESC", (user_id, guild_id))
+        rows = c.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def count_vouches(user_id, guild_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT COUNT(*) as cnt FROM vouches WHERE to_user=%s AND guild_id=%s", (user_id, guild_id))
-    row = c.fetchone()
-    conn.close()
-    return row["cnt"] if row else 0
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT COUNT(*) as cnt FROM vouches WHERE to_user=%s AND guild_id=%s", (user_id, guild_id))
+        row = c.fetchone()
+        return row["cnt"] if row else 0
+    finally:
+        conn.close()
 
 
 def has_vouched_recently(from_user, to_user, guild_id, hours=24):
-    conn = get_conn()
-    from datetime import timedelta
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
-    c.execute(
-        "SELECT COUNT(*) as cnt FROM vouches WHERE from_user=%s AND to_user=%s AND guild_id=%s AND created_at>%s",
-        (from_user, to_user, guild_id, cutoff)
-    )
-    row = c.fetchone()
-    conn.close()
-    return (row["cnt"] if row else 0) > 0
+    conn = _get_conn()
+    try:
+        from datetime import timedelta
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        c.execute(
+            "SELECT COUNT(*) as cnt FROM vouches WHERE from_user=%s AND to_user=%s AND guild_id=%s AND created_at>%s",
+            (from_user, to_user, guild_id, cutoff)
+        )
+        row = c.fetchone()
+        return (row["cnt"] if row else 0) > 0
+    finally:
+        conn.close()
 
 
 def set_vouches(user_id, guild_id, count):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM vouches WHERE to_user=%s AND guild_id=%s", (user_id, guild_id))
-    for i in range(count):
-        c.execute(
-            "INSERT INTO vouches (from_user, to_user, guild_id, note, created_at) VALUES (%s,%s,%s,%s,%s)",
-            ("system", user_id, guild_id, "Manually set", datetime.utcnow().isoformat())
-        )
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM vouches WHERE to_user=%s AND guild_id=%s", (user_id, guild_id))
+        for i in range(count):
+            c.execute(
+                "INSERT INTO vouches (from_user, to_user, guild_id, note, created_at) VALUES (%s,%s,%s,%s,%s)",
+                ("system", user_id, guild_id, "Manually set", datetime.utcnow().isoformat())
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def delete_vouch(vouch_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM vouches WHERE id=%s", (vouch_id,))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM vouches WHERE id=%s", (vouch_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def delete_latest_vouch(from_user, to_user, guild_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute(
-        "SELECT id FROM vouches WHERE from_user=%s AND to_user=%s AND guild_id=%s ORDER BY created_at DESC LIMIT 1",
-        (from_user, to_user, guild_id)
-    )
-    row = c.fetchone()
-    if row:
-        c.execute("DELETE FROM vouches WHERE id=%s", (row["id"],))
-        conn.commit()
-    conn.close()
-    return bool(row)
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute(
+            "SELECT id FROM vouches WHERE from_user=%s AND to_user=%s AND guild_id=%s ORDER BY created_at DESC LIMIT 1",
+            (from_user, to_user, guild_id)
+        )
+        row = c.fetchone()
+        if row:
+            c.execute("DELETE FROM vouches WHERE id=%s", (row["id"],))
+            conn.commit()
+        return bool(row)
+    finally:
+        conn.close()
 
 
 # ── Deposits ──────────────────────────────────────────────────────────────────
 
 def add_deposit(user_id, guild_id, deposit_type, amount, note, staff_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO deposits (user_id, guild_id, deposit_type, amount, note, staff_id, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-        (user_id, guild_id, deposit_type, amount, note, staff_id, datetime.utcnow().isoformat())
-    )
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO deposits (user_id, guild_id, deposit_type, amount, note, staff_id, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (user_id, guild_id, deposit_type, amount, note, staff_id, datetime.utcnow().isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_deposits(user_id, guild_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT * FROM deposits WHERE user_id=%s AND guild_id=%s ORDER BY created_at DESC", (user_id, guild_id))
-    rows = c.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT * FROM deposits WHERE user_id=%s AND guild_id=%s ORDER BY created_at DESC", (user_id, guild_id))
+        rows = c.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def delete_deposit(deposit_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM deposits WHERE id=%s", (deposit_id,))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM deposits WHERE id=%s", (deposit_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ── Blacklist ─────────────────────────────────────────────────────────────────
 
 def blacklist_user(user_id, guild_id, reason, added_by):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO blacklist (user_id, guild_id, reason, added_by, created_at) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (user_id, guild_id) DO UPDATE SET reason=EXCLUDED.reason, added_by=EXCLUDED.added_by",
-        (user_id, guild_id, reason, added_by, datetime.utcnow().isoformat())
-    )
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO blacklist (user_id, guild_id, reason, added_by, created_at) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (user_id, guild_id) DO UPDATE SET reason=EXCLUDED.reason, added_by=EXCLUDED.added_by",
+            (user_id, guild_id, reason, added_by, datetime.utcnow().isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def unblacklist_user(user_id, guild_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM blacklist WHERE user_id=%s AND guild_id=%s", (user_id, guild_id))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM blacklist WHERE user_id=%s AND guild_id=%s", (user_id, guild_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def is_blacklisted(user_id, guild_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT * FROM blacklist WHERE user_id=%s AND guild_id=%s", (user_id, guild_id))
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT * FROM blacklist WHERE user_id=%s AND guild_id=%s", (user_id, guild_id))
+        row = c.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 # ── Confirmations ─────────────────────────────────────────────────────────────
 
 def create_confirmation(channel_id, guild_id, user1_id, user2_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute(
-        "INSERT INTO confirmations (channel_id, guild_id, user1_id, user2_id, created_at) VALUES (%s,%s,%s,%s,%s) RETURNING id",
-        (channel_id, guild_id, user1_id, user2_id, datetime.utcnow().isoformat())
-    )
-    row = c.fetchone()
-    conn.commit()
-    conn.close()
-    return row["id"]
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute(
+            "INSERT INTO confirmations (channel_id, guild_id, user1_id, user2_id, created_at) VALUES (%s,%s,%s,%s,%s) RETURNING id",
+            (channel_id, guild_id, user1_id, user2_id, datetime.utcnow().isoformat())
+        )
+        row = c.fetchone()
+        conn.commit()
+        return row["id"]
+    finally:
+        conn.close()
 
 
 def update_confirmation(conf_id, message_id=None, user1_status=None, user2_status=None):
-    conn = get_conn()
-    c = conn.cursor()
-    if message_id:
-        c.execute("UPDATE confirmations SET message_id=%s WHERE id=%s", (message_id, conf_id))
-    if user1_status:
-        c.execute("UPDATE confirmations SET user1_status=%s WHERE id=%s", (user1_status, conf_id))
-    if user2_status:
-        c.execute("UPDATE confirmations SET user2_status=%s WHERE id=%s", (user2_status, conf_id))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        if message_id:
+            c.execute("UPDATE confirmations SET message_id=%s WHERE id=%s", (message_id, conf_id))
+        if user1_status:
+            c.execute("UPDATE confirmations SET user1_status=%s WHERE id=%s", (user1_status, conf_id))
+        if user2_status:
+            c.execute("UPDATE confirmations SET user2_status=%s WHERE id=%s", (user2_status, conf_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def resolve_confirmation(conf_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("UPDATE confirmations SET resolved_at=%s WHERE id=%s", (datetime.utcnow().isoformat(), conf_id))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE confirmations SET resolved_at=%s WHERE id=%s", (datetime.utcnow().isoformat(), conf_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_confirmation(conf_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT * FROM confirmations WHERE id=%s", (conf_id,))
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT * FROM confirmations WHERE id=%s", (conf_id,))
+        row = c.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 # ── Auto MM Sessions ──────────────────────────────────────────────────────────
 
 def create_automm_session(channel_id, guild_id, user1_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO automm_sessions (channel_id, guild_id, user1_id, state, created_at) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (channel_id) DO UPDATE SET guild_id=EXCLUDED.guild_id, user1_id=EXCLUDED.user1_id, state=EXCLUDED.state, created_at=EXCLUDED.created_at",
-        (channel_id, guild_id, user1_id, "waiting_user2", datetime.utcnow().isoformat())
-    )
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO automm_sessions (channel_id, guild_id, user1_id, state, created_at) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (channel_id) DO UPDATE SET guild_id=EXCLUDED.guild_id, user1_id=EXCLUDED.user1_id, state=EXCLUDED.state, created_at=EXCLUDED.created_at",
+            (channel_id, guild_id, user1_id, "waiting_user2", datetime.utcnow().isoformat())
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_automm_session(channel_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT * FROM automm_sessions WHERE channel_id=%s", (channel_id,))
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT * FROM automm_sessions WHERE channel_id=%s", (channel_id,))
+        row = c.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def get_automm_session_by_sender(guild_id, sender_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute(
-        "SELECT * FROM automm_sessions WHERE guild_id=%s AND sender_id=%s AND state='waiting_automm'",
-        (guild_id, sender_id)
-    )
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute(
+            "SELECT * FROM automm_sessions WHERE guild_id=%s AND sender_id=%s AND state='waiting_automm'",
+            (guild_id, sender_id)
+        )
+        row = c.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def update_automm_session(channel_id, **kwargs):
-    conn = get_conn()
-    c = conn.cursor()
-    for key, value in kwargs.items():
-        c.execute(f"UPDATE automm_sessions SET {key}=%s WHERE channel_id=%s", (value, channel_id))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        for key, value in kwargs.items():
+            c.execute(f"UPDATE automm_sessions SET {key}=%s WHERE channel_id=%s", (value, channel_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def delete_automm_session(channel_id):
-    conn = get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM automm_sessions WHERE channel_id=%s", (channel_id,))
-    conn.commit()
-    conn.close()
+    conn = _get_conn()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM automm_sessions WHERE channel_id=%s", (channel_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 def get_stats(guild_id):
-    conn = get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    c.execute("SELECT COUNT(*) as c FROM tickets WHERE guild_id=%s", (guild_id,))
-    total_tickets = c.fetchone()["c"]
-    c.execute("SELECT COUNT(*) as c FROM tickets WHERE guild_id=%s AND status='open'", (guild_id,))
-    open_tickets = c.fetchone()["c"]
-    c.execute("SELECT COUNT(*) as c FROM vouches WHERE guild_id=%s", (guild_id,))
-    total_vouches = c.fetchone()["c"]
-    c.execute("SELECT COUNT(*) as c FROM confirmations WHERE guild_id=%s", (guild_id,))
-    total_confirms = c.fetchone()["c"]
-    c.execute("SELECT COUNT(*) as c FROM deposits WHERE guild_id=%s", (guild_id,))
-    total_deposits = c.fetchone()["c"]
-    conn.close()
-    return {
-        "total_tickets": total_tickets,
-        "open_tickets": open_tickets,
-        "total_vouches": total_vouches,
-        "total_confirms": total_confirms,
-        "total_deposits": total_deposits,
-    }
-    
+    conn = _get_conn()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("SELECT COUNT(*) as c FROM tickets WHERE guild_id=%s", (guild_id,))
+        total_tickets = c.fetchone()["c"]
+        c.execute("SELECT COUNT(*) as c FROM tickets WHERE guild_id=%s AND status='open'", (guild_id,))
+        open_tickets = c.fetchone()["c"]
+        c.execute("SELECT COUNT(*) as c FROM vouches WHERE guild_id=%s", (guild_id,))
+        total_vouches = c.fetchone()["c"]
+        c.execute("SELECT COUNT(*) as c FROM confirmations WHERE guild_id=%s", (guild_id,))
+        total_confirms = c.fetchone()["c"]
+        c.execute("SELECT COUNT(*) as c FROM deposits WHERE guild_id=%s", (guild_id,))
+        total_deposits = c.fetchone()["c"]
+        return {
+            "total_tickets": total_tickets,
+            "open_tickets": open_tickets,
+            "total_vouches": total_vouches,
+            "total_confirms": total_confirms,
+            "total_deposits": total_deposits,
+        }
+    finally:
+        conn.close()
