@@ -27,6 +27,7 @@ CATEGORIES = {
         "fields": [
             ("ticket_category",  "Ticket Category ID"),
             ("support_category", "Support Ticket Category ID"),
+            ("automm_category",  "Auto MM Ticket Category ID"),
         ]
     },
     "mercy": {
