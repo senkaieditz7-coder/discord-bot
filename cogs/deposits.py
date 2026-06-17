@@ -29,7 +29,7 @@ class IngameDepositModal(discord.ui.Modal, title="Log In-Game Deposit"):
         amount_str = f"{self.item.value} ({self.game.value})"
         note_str   = f"Value: {self.value.value} | Date: {date_str}"
 
-        db.add_deposit(
+        await db.add_deposit(
             str(self.target_user.id),
             str(interaction.guild_id),
             "ingame",
@@ -47,7 +47,7 @@ class IngameDepositModal(discord.ui.Modal, title="Log In-Game Deposit"):
         embed.add_field(name="Date",  value=date_str,                 inline=True)
         embed.set_footer(text=f"Logged by {interaction.user}")
 
-        deposit_log_id = db.get_config(str(interaction.guild_id), "deposit_log_channel")
+        deposit_log_id = await db.get_config(str(interaction.guild_id), "deposit_log_channel")
         if deposit_log_id:
             lc = interaction.guild.get_channel(int(deposit_log_id))
             if lc:
@@ -72,7 +72,7 @@ class GeneralDepositModal(discord.ui.Modal, title="Log Deposit"):
         if self.note.value:
             note_str += f" | {self.note.value}"
 
-        db.add_deposit(
+        await db.add_deposit(
             str(self.target_user.id),
             str(interaction.guild_id),
             self.deposit_type,
@@ -91,7 +91,7 @@ class GeneralDepositModal(discord.ui.Modal, title="Log Deposit"):
             embed.add_field(name="Note", value=self.note.value, inline=False)
         embed.set_footer(text=f"Logged by {interaction.user}")
 
-        deposit_log_id = db.get_config(str(interaction.guild_id), "deposit_log_channel")
+        deposit_log_id = await db.get_config(str(interaction.guild_id), "deposit_log_channel")
         if deposit_log_id:
             lc = interaction.guild.get_channel(int(deposit_log_id))
             if lc:
@@ -111,7 +111,7 @@ class Deposits(commands.Cog):
     @app_commands.choices(deposit_type=DEPOSIT_TYPES)
     async def depositset(self, interaction: discord.Interaction, user: discord.Member, deposit_type: Choice[str]):
         from cogs.tickets import is_mm_or_admin
-        if not is_mm_or_admin(interaction.user):
+        if not await is_mm_or_admin(interaction.user):
             await interaction.response.send_message("Only MM role or higher can log deposits.", ephemeral=True)
             return
         if deposit_type.value == "ingame":
@@ -122,25 +122,20 @@ class Deposits(commands.Cog):
     @app_commands.command(name="depositcheck", description="View deposit history for a user")
     @app_commands.describe(user="The user to check")
     async def depositcheck(self, interaction: discord.Interaction, user: discord.Member):
+        await interaction.response.defer(ephemeral=True)
         from cogs.tickets import is_mm_or_admin
-        if not is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only staff can check deposits.", ephemeral=True)
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only staff can check deposits.", ephemeral=True)
             return
 
-        loading_embed = discord.Embed(
-            description=f"🔍 Checking deposit logs to find deposits for **{user.display_name}**…",
-            color=discord.Color.blurple()
-        )
-        await interaction.response.send_message(embed=loading_embed)
-        await __import__("asyncio").sleep(4)
-
-        deposits = db.get_deposits(str(user.id), str(interaction.guild_id))
+        deposits = await db.get_deposits(str(user.id), str(interaction.guild_id))
         if not deposits:
-            await interaction.edit_original_response(
+            await interaction.followup.send(
                 embed=discord.Embed(
                     description=f"❌ No deposit records found for **{user.display_name}**.",
                     color=discord.Color.red()
-                )
+                ),
+                ephemeral=True
             )
             return
 
@@ -164,17 +159,18 @@ class Deposits(commands.Cog):
         if len(deposits) > 10:
             embed.set_footer(text=f"Showing 10 of {len(deposits)} deposits.")
 
-        await interaction.edit_original_response(embed=embed)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="depositdelete", description="[Staff] Delete a deposit record by ID")
     @app_commands.describe(user="The user", deposit_id="Deposit ID to delete")
     async def depositdelete(self, interaction: discord.Interaction, user: discord.Member, deposit_id: int):
+        await interaction.response.defer(ephemeral=True)
         from cogs.tickets import is_mm_or_admin
-        if not is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only staff can delete deposits.", ephemeral=True)
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only staff can delete deposits.", ephemeral=True)
             return
-        db.delete_deposit(deposit_id)
-        await interaction.response.send_message(
+        await db.delete_deposit(deposit_id)
+        await interaction.followup.send(
             f"Deposit `#{deposit_id}` for {user.mention} has been deleted.",
             ephemeral=True
         )
@@ -182,3 +178,4 @@ class Deposits(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Deposits(bot))
+        
