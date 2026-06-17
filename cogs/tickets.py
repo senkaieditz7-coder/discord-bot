@@ -5,24 +5,24 @@ import db
 from cogs.transcripts import save_transcript, build_html_transcript
 
 
-def get_mm_role(guild):
-    mm_id = db.get_config(str(guild.id), "mm_role")
+async def get_mm_role(guild):
+    mm_id = await db.get_config(str(guild.id), "mm_role")
     if mm_id:
         return guild.get_role(int(mm_id))
     return None
 
 
-def get_admin_role(guild):
-    admin_id = db.get_config(str(guild.id), "admin_role")
+async def get_admin_role(guild):
+    admin_id = await db.get_config(str(guild.id), "admin_role")
     if admin_id:
         return guild.get_role(int(admin_id))
     return None
 
 
-def is_mm_or_admin(member: discord.Member):
+async def is_mm_or_admin(member: discord.Member):
     guild = member.guild
-    mm_role = get_mm_role(guild)
-    admin_role = get_admin_role(guild)
+    mm_role = await get_mm_role(guild)
+    admin_role = await get_admin_role(guild)
     roles = [r.id for r in member.roles]
     if mm_role and mm_role.id in roles:
         return True
@@ -39,10 +39,10 @@ class TicketButtons(discord.ui.View):
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.green, custom_id="ticket_claim", emoji="✋")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_mm_or_admin(interaction.user):
+        if not await is_mm_or_admin(interaction.user):
             await interaction.response.send_message("Only MM staff can claim tickets.", ephemeral=True)
             return
-        ticket = db.get_ticket(str(interaction.channel_id))
+        ticket = await db.get_ticket(str(interaction.channel_id))
         if not ticket:
             await interaction.response.send_message("Ticket not found.", ephemeral=True)
             return
@@ -51,7 +51,7 @@ class TicketButtons(discord.ui.View):
             name = claimer.mention if claimer else f"<@{ticket['claimed_by']}>"
             await interaction.response.send_message(f"Already claimed by {name}.", ephemeral=True)
             return
-        db.claim_ticket(str(interaction.channel_id), str(interaction.user.id))
+        await db.claim_ticket(str(interaction.channel_id), str(interaction.user.id))
         embed = discord.Embed(
             title="Ticket Claimed",
             description=f"{interaction.user.mention} has claimed this ticket.",
@@ -61,14 +61,14 @@ class TicketButtons(discord.ui.View):
 
     @discord.ui.button(label="Add User", style=discord.ButtonStyle.blurple, custom_id="ticket_adduser", emoji="➕")
     async def add_user(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_mm_or_admin(interaction.user):
+        if not await is_mm_or_admin(interaction.user):
             await interaction.response.send_message("Only MM staff can add users.", ephemeral=True)
             return
         await interaction.response.send_modal(AddUserModal())
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.red, custom_id="ticket_close", emoji="🔒")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_mm_or_admin(interaction.user):
+        if not await is_mm_or_admin(interaction.user):
             await interaction.response.send_message("Only MM staff can close tickets.", ephemeral=True)
             return
         await interaction.response.send_message("Closing ticket…")
@@ -90,20 +90,20 @@ class AddUserModal(discord.ui.Modal, title="Add User to Ticket"):
             await interaction.response.send_message("User not found in this server.", ephemeral=True)
             return
         await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
-        db.add_ticket_user(str(interaction.channel_id), str(uid))
+        await db.add_ticket_user(str(interaction.channel_id), str(uid))
         await interaction.response.send_message(f"Added {member.mention} to the ticket.")
 
 
 async def close_ticket_channel(channel: discord.TextChannel, guild: discord.Guild, closer: discord.Member):
     import io as _io
-    ticket = db.get_ticket(str(channel.id))
+    ticket = await db.get_ticket(str(channel.id))
 
     plain_text = await save_transcript(channel, guild)
-    db.close_ticket(str(channel.id), plain_text)
+    await db.close_ticket(str(channel.id), plain_text)
 
     html_bytes = await build_html_transcript(channel, guild, ticket or {}, closer)
 
-    transcript_channel_id = db.get_config(str(guild.id), "transcript_channel")
+    transcript_channel_id = await db.get_config(str(guild.id), "transcript_channel")
     if transcript_channel_id:
         tc = guild.get_channel(int(transcript_channel_id))
         if tc:
@@ -135,7 +135,7 @@ async def close_ticket_channel(channel: discord.TextChannel, guild: discord.Guil
                 )
             )
 
-    log_channel_id = db.get_config(str(guild.id), "log_channel")
+    log_channel_id = await db.get_config(str(guild.id), "log_channel")
     if log_channel_id:
         lc = guild.get_channel(int(log_channel_id))
         if lc:
@@ -154,16 +154,18 @@ class Tickets(commands.Cog):
         self.bot.add_view(TicketButtons())
 
     async def open_ticket(self, guild: discord.Guild, opener: discord.Member, ticket_type="trade"):
-        bl = db.is_blacklisted(str(opener.id), str(guild.id))
+        bl = await db.is_blacklisted(str(opener.id), str(guild.id))
         if bl:
             return None, "blacklisted"
 
         category_key = "ticket_category" if ticket_type == "trade" else "support_category"
-        cat_id = db.get_config(str(guild.id), category_key)
+        if ticket_type == "automm":
+            category_key = "automm_category"
+        cat_id = await db.get_config(str(guild.id), category_key)
         category = guild.get_channel(int(cat_id)) if cat_id else None
 
-        mm_role = get_mm_role(guild)
-        admin_role = get_admin_role(guild)
+        mm_role = await get_mm_role(guild)
+        admin_role = await get_admin_role(guild)
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -183,14 +185,14 @@ class Tickets(commands.Cog):
             reason=f"Ticket opened by {opener}"
         )
 
-        db.create_ticket(str(channel.id), str(guild.id), str(opener.id), ticket_type)
+        await db.create_ticket(str(channel.id), str(guild.id), str(opener.id), ticket_type)
 
         if ticket_type == "automm":
             automm_cog = self.bot.get_cog("AutoMM")
             if automm_cog:
                 await automm_cog._start_session(channel, guild, opener)
         else:
-            cfg = db.get_all_config(str(guild.id))
+            cfg = await db.get_all_config(str(guild.id))
             title = cfg.get("ticket_panel_title", "Trade Ticket") if ticket_type == "trade" else cfg.get("support_panel_title", "Support Ticket")
             desc = cfg.get("ticket_panel_desc", "A staff member will be with you shortly.") if ticket_type == "trade" else cfg.get("support_panel_desc", "Please describe your issue.")
             footer = cfg.get("ticket_panel_footer", "") if ticket_type == "trade" else cfg.get("support_panel_footer", "")
@@ -208,7 +210,7 @@ class Tickets(commands.Cog):
 
             await channel.send(embed=embed, view=TicketButtons())
 
-        log_channel_id = db.get_config(str(guild.id), "log_channel")
+        log_channel_id = await db.get_config(str(guild.id), "log_channel")
         if log_channel_id:
             lc = guild.get_channel(int(log_channel_id))
             if lc:
@@ -222,85 +224,91 @@ class Tickets(commands.Cog):
 
     @app_commands.command(name="claim", description="Claim this ticket as MM staff")
     async def claim(self, interaction: discord.Interaction):
-        if not is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can claim tickets.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff can claim tickets.", ephemeral=True)
             return
-        ticket = db.get_ticket(str(interaction.channel_id))
+        ticket = await db.get_ticket(str(interaction.channel_id))
         if not ticket:
-            await interaction.response.send_message("This is not a ticket channel.", ephemeral=True)
+            await interaction.followup.send("This is not a ticket channel.", ephemeral=True)
             return
         if ticket["claimed_by"]:
             claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
             name = claimer.mention if claimer else f"<@{ticket['claimed_by']}>"
-            await interaction.response.send_message(f"Already claimed by {name}.", ephemeral=True)
+            await interaction.followup.send(f"Already claimed by {name}.", ephemeral=True)
             return
-        db.claim_ticket(str(interaction.channel_id), str(interaction.user.id))
+        await db.claim_ticket(str(interaction.channel_id), str(interaction.user.id))
         embed = discord.Embed(
             title="Ticket Claimed",
             description=f"{interaction.user.mention} has claimed this ticket.",
             color=discord.Color.green()
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="close", description="Close and delete this ticket channel")
     async def close(self, interaction: discord.Interaction):
-        if not is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can close tickets.", ephemeral=True)
+        await interaction.response.defer()
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff can close tickets.", ephemeral=True)
             return
-        ticket = db.get_ticket(str(interaction.channel_id))
+        ticket = await db.get_ticket(str(interaction.channel_id))
         if not ticket:
-            await interaction.response.send_message("This is not a ticket channel.", ephemeral=True)
+            await interaction.followup.send("This is not a ticket channel.", ephemeral=True)
             return
-        await interaction.response.send_message("Closing ticket…")
+        await interaction.followup.send("Closing ticket…")
         await close_ticket_channel(interaction.channel, interaction.guild, interaction.user)
 
     @app_commands.command(name="adduser", description="Add a user to this ticket")
     @app_commands.describe(user="The user to add")
     async def adduser(self, interaction: discord.Interaction, user: discord.Member):
-        if not is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can add users.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff can add users.", ephemeral=True)
             return
-        ticket = db.get_ticket(str(interaction.channel_id))
+        ticket = await db.get_ticket(str(interaction.channel_id))
         if not ticket:
-            await interaction.response.send_message("This is not a ticket channel.", ephemeral=True)
+            await interaction.followup.send("This is not a ticket channel.", ephemeral=True)
             return
         await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
-        db.add_ticket_user(str(interaction.channel_id), str(user.id))
-        await interaction.response.send_message(f"Added {user.mention} to the ticket.")
+        await db.add_ticket_user(str(interaction.channel_id), str(user.id))
+        await interaction.followup.send(f"Added {user.mention} to the ticket.")
 
     @app_commands.command(name="removeuser", description="Remove a user from this ticket")
     @app_commands.describe(user="The user to remove")
     async def removeuser(self, interaction: discord.Interaction, user: discord.Member):
-        if not is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can remove users.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff can remove users.", ephemeral=True)
             return
-        ticket = db.get_ticket(str(interaction.channel_id))
+        ticket = await db.get_ticket(str(interaction.channel_id))
         if not ticket:
-            await interaction.response.send_message("This is not a ticket channel.", ephemeral=True)
+            await interaction.followup.send("This is not a ticket channel.", ephemeral=True)
             return
         await interaction.channel.set_permissions(user, overwrite=None)
-        db.remove_ticket_user(str(interaction.channel_id), str(user.id))
-        await interaction.response.send_message(f"Removed {user.mention} from the ticket.")
+        await db.remove_ticket_user(str(interaction.channel_id), str(user.id))
+        await interaction.followup.send(f"Removed {user.mention} from the ticket.")
 
     @app_commands.command(name="transfer", description="Transfer this ticket to another middleman")
     @app_commands.describe(mm="The MM to transfer to")
     async def transfer(self, interaction: discord.Interaction, mm: discord.Member):
-        if not is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can transfer tickets.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff can transfer tickets.", ephemeral=True)
             return
-        ticket = db.get_ticket(str(interaction.channel_id))
+        ticket = await db.get_ticket(str(interaction.channel_id))
         if not ticket:
-            await interaction.response.send_message("This is not a ticket channel.", ephemeral=True)
+            await interaction.followup.send("This is not a ticket channel.", ephemeral=True)
             return
-        db.transfer_ticket(str(interaction.channel_id), str(mm.id))
+        await db.transfer_ticket(str(interaction.channel_id), str(mm.id))
         await interaction.channel.set_permissions(mm, read_messages=True, send_messages=True)
         embed = discord.Embed(
             title="Ticket Transferred",
             description=f"This ticket has been transferred to {mm.mention} by {interaction.user.mention}.",
             color=discord.Color.orange()
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
 
 async def setup(bot):
     await bot.add_cog(Tickets(bot))
+        
