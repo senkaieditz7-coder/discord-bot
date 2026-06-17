@@ -39,7 +39,7 @@ class MercyView(discord.ui.View):
             embed.add_field(name="Role Granted", value=role.mention)
         await interaction.response.edit_message(embed=embed, view=None)
 
-        cfg = db.get_all_config(str(interaction.guild_id))
+        cfg = await db.get_all_config(str(interaction.guild_id))
         dm_title = cfg.get("mercy_dm_title", "").strip() or "🎉 Mercy Invite Accepted"
         dm_body = cfg.get("mercy_dm_body", "").strip() or (
             f"Welcome! Your mercy invite from **{interaction.guild.name}** has been accepted "
@@ -89,16 +89,17 @@ class Mercy(commands.Cog):
     @app_commands.command(name="mercy", description="Send a mercy/special invite embed to a user")
     @app_commands.describe(user="The user to invite")
     async def mercy(self, interaction: discord.Interaction, user: discord.Member):
+        await interaction.response.defer()
         from cogs.tickets import is_mm_or_admin
-        if not is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can send mercy invites.", ephemeral=True)
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff can send mercy invites.", ephemeral=True)
             return
 
         if user.bot:
-            await interaction.response.send_message("Cannot send mercy invites to bots.", ephemeral=True)
+            await interaction.followup.send("Cannot send mercy invites to bots.", ephemeral=True)
             return
 
-        cfg = db.get_all_config(str(interaction.guild_id))
+        cfg = await db.get_all_config(str(interaction.guild_id))
         mercy_role_id_str = cfg.get("mercy_role", "")
         mercy_message = cfg.get("mercy_message", "You have been selected for a special opportunity. Do you accept?")
 
@@ -115,8 +116,9 @@ class Mercy(commands.Cog):
             embed.add_field(name="Role on Acceptance", value=role.mention)
 
         view = MercyView(interaction.user, user, role_id)
-        await interaction.response.send_message(content=user.mention, embed=embed, view=view)
+        await interaction.followup.send(content=user.mention, embed=embed, view=view)
 
 
 async def setup(bot):
     await bot.add_cog(Mercy(bot))
+    
