@@ -102,7 +102,7 @@ class Confirm(commands.Cog):
     @app_commands.describe(user1="First trader", user2="Second trader")
     async def confirm(self, interaction: discord.Interaction, user1: discord.Member, user2: discord.Member):
         from cogs.tickets import is_mm_or_admin
-        if not is_mm_or_admin(interaction.user):
+        if not await is_mm_or_admin(interaction.user):
             await interaction.response.send_message("Only MM staff can initiate confirmations.", ephemeral=True)
             return
 
