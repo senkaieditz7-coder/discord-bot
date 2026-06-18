@@ -12,8 +12,7 @@ class ConfirmView(discord.ui.View):
         self.user1 = user1
         self.user2 = user2
 
-    def _status_text(self):
-        conf = db.get_confirmation(self.conf_id)
+    def _status_text(self, conf: dict) -> str:
         if not conf:
             return "Confirmation not found."
 
@@ -27,25 +26,24 @@ class ConfirmView(discord.ui.View):
         )
 
     async def _update_embed(self, message: discord.Message):
-        cfg = await asyncio.to_thread(db.get_all_config, str(message.guild.id))
-        title = cfg.get("confirm_title", "Trade Confirmation")
-        desc = cfg.get("confirm_desc", "Both traders must confirm to proceed with the trade.")
+        cfg    = await asyncio.to_thread(db.get_all_config, str(message.guild.id))
+        title  = cfg.get("confirm_title",  "Trade Confirmation")
+        desc   = cfg.get("confirm_desc",   "Both traders must confirm to proceed with the trade.")
         footer = cfg.get("confirm_footer", "")
-        image = cfg.get("confirm_image", "")
+        image  = cfg.get("confirm_image",  "")
+
+        conf = await asyncio.to_thread(db.get_confirmation, self.conf_id)
 
         embed = discord.Embed(
             title=title,
-            description=f"{desc}\n\n{self._status_text()}",
+            description=f"{desc}\n\n{self._status_text(conf)}",
             color=discord.Color.gold()
         )
-        if footer:
-            embed.set_footer(text=footer)
-        if image:
-            embed.set_image(url=image)
+        if footer: embed.set_footer(text=footer)
+        if image:  embed.set_image(url=image)
 
-        conf = await asyncio.to_thread(db.get_confirmation, self.conf_id)
-        s1 = conf["user1_status"]
-        s2 = conf["user2_status"]
+        s1 = conf["user1_status"] if conf else "pending"
+        s2 = conf["user2_status"] if conf else "pending"
 
         if s1 == "declined" or s2 == "declined":
             embed.color = discord.Color.red()
@@ -59,7 +57,7 @@ class ConfirmView(discord.ui.View):
         await message.edit(embed=embed, view=self if not self.is_finished() else None)
 
     async def _handle(self, interaction: discord.Interaction, action: str):
-        uid = str(interaction.user.id)
+        uid  = str(interaction.user.id)
         conf = await asyncio.to_thread(db.get_confirmation, self.conf_id)
         if not conf:
             await interaction.response.send_message("Confirmation expired.", ephemeral=True)
@@ -70,14 +68,16 @@ class ConfirmView(discord.ui.View):
         elif uid == conf["user2_id"] and conf["user2_status"] == "pending":
             await asyncio.to_thread(db.update_confirmation, self.conf_id, None, None, action)
         else:
-            await interaction.response.send_message("You are not part of this confirmation or already responded.", ephemeral=True)
+            await interaction.response.send_message(
+                "You are not part of this confirmation or already responded.", ephemeral=True
+            )
             return
 
         await interaction.response.defer()
         await self._update_embed(interaction.message)
 
         conf = await asyncio.to_thread(db.get_confirmation, self.conf_id)
-        if conf["user1_status"] != "pending" and conf["user2_status"] != "pending":
+        if conf and conf["user1_status"] != "pending" and conf["user2_status"] != "pending":
             await asyncio.to_thread(db.resolve_confirmation, self.conf_id)
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green, emoji="✅")
@@ -120,11 +120,11 @@ class Confirm(commands.Cog):
             str(user2.id)
         )
 
-        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
-        title = cfg.get("confirm_title", "Trade Confirmation")
-        desc = cfg.get("confirm_desc", "Both traders must confirm to proceed with the trade.")
+        cfg    = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        title  = cfg.get("confirm_title",  "Trade Confirmation")
+        desc   = cfg.get("confirm_desc",   "Both traders must confirm to proceed with the trade.")
         footer = cfg.get("confirm_footer", "Confirmation expires in 5 minutes.")
-        image = cfg.get("confirm_image", "")
+        image  = cfg.get("confirm_image",  "")
 
         def fmt(uid, status):
             emoji = {"pending": "⏳", "confirmed": "✅", "declined": "❌"}.get(status, "⏳")
@@ -135,10 +135,8 @@ class Confirm(commands.Cog):
             description=f"{desc}\n\n{fmt(str(user1.id), 'pending')}\n{fmt(str(user2.id), 'pending')}",
             color=discord.Color.gold()
         )
-        if footer:
-            embed.set_footer(text=footer)
-        if image:
-            embed.set_image(url=image)
+        if footer: embed.set_footer(text=footer)
+        if image:  embed.set_image(url=image)
 
         view = ConfirmView(conf_id, user1, user2)
         await interaction.followup.send(
@@ -171,11 +169,11 @@ class Confirm(commands.Cog):
             str(user2.id)
         )
 
-        cfg = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
-        title = cfg.get("confirm_title", "Trade Confirmation")
-        desc = cfg.get("confirm_desc", "Both traders must confirm to proceed with the trade.")
+        cfg    = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
+        title  = cfg.get("confirm_title",  "Trade Confirmation")
+        desc   = cfg.get("confirm_desc",   "Both traders must confirm to proceed with the trade.")
         footer = cfg.get("confirm_footer", "Confirmation expires in 5 minutes.")
-        image = cfg.get("confirm_image", "")
+        image  = cfg.get("confirm_image",  "")
 
         def fmt(uid, status):
             emoji = {"pending": "⏳", "confirmed": "✅", "declined": "❌"}.get(status, "⏳")
@@ -186,10 +184,8 @@ class Confirm(commands.Cog):
             description=f"{desc}\n\n{fmt(str(user1.id), 'pending')}\n{fmt(str(user2.id), 'pending')}",
             color=discord.Color.gold()
         )
-        if footer:
-            embed.set_footer(text=footer)
-        if image:
-            embed.set_image(url=image)
+        if footer: embed.set_footer(text=footer)
+        if image:  embed.set_image(url=image)
 
         view = ConfirmView(conf_id, user1, user2)
         msg = await ctx.send(content=f"{user1.mention} {user2.mention}", embed=embed, view=view)
