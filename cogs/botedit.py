@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import db
+from config import BOT_OWNER_ID
 
 
 CATEGORIES = {
@@ -216,7 +217,7 @@ class BotEdit(commands.Cog):
 
     @app_commands.command(name="botedit", description="[Owner] Edit all bot settings from Discord")
     async def botedit(self, interaction: discord.Interaction):
-        if interaction.user.id != 1461290677647179816:
+        if interaction.user.id != BOT_OWNER_ID:
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
             return
 
