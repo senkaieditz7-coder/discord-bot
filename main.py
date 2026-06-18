@@ -36,17 +36,17 @@ class Bot(commands.Bot):
         for cog in COGS:
             try:
                 await self.load_extension(cog)
-                print(f"[+] Loaded {cog}")
+                print(f"[+] Loaded {cog}", flush=True)
             except Exception as e:
-                print(f"[!] Failed to load {cog}: {e}")
+                print(f"[!] Failed to load {cog}: {e}", flush=True)
         try:
             synced = await self.tree.sync()
-            print(f"[✓] Synced {len(synced)} slash commands globally.")
+            print(f"[✓] Synced {len(synced)} slash commands globally.", flush=True)
         except Exception as e:
-            print(f"[!] Failed to sync commands: {e}")
+            print(f"[!] Failed to sync commands: {e}", flush=True)
 
     async def on_ready(self):
-        print(f"[✓] Logged in as {self.user} ({self.user.id})")
+        print(f"[✓] Logged in as {self.user} ({self.user.id})", flush=True)
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
@@ -55,7 +55,7 @@ class Bot(commands.Bot):
         )
 
     async def on_guild_join(self, guild: discord.Guild):
-        print(f"[+] Joined guild: {guild.name} ({guild.id})")
+        print(f"[+] Joined guild: {guild.name} ({guild.id})", flush=True)
 
     async def on_message(self, message: discord.Message):
         if message.author.bot:
@@ -71,16 +71,16 @@ class Bot(commands.Bot):
                 await interaction.followup.send(msg, ephemeral=True)
         except Exception:
             pass
-        print(f"[!] Command error in {interaction.command}: {error}")
+        print(f"[!] Command error in {interaction.command}: {error}", flush=True)
 
 
 async def main():
     if not TOKEN:
-        print("[!] DISCORD_BOT_TOKEN is not set. Please add it to your secrets.")
+        print("[!] DISCORD_BOT_TOKEN is not set. Please add it to your secrets.", flush=True)
         return
 
     db.init_db()
-    print("[✓] Database initialized.")
+    print("[✓] Database initialized.", flush=True)
 
     bot = Bot()
     async with bot:
