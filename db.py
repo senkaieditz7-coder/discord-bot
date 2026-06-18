@@ -3,27 +3,61 @@ import asyncio
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
+import psycopg2.extensions
 from datetime import datetime
 
 DB_URL = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
 
 _pool = None
 
+# Extra connection kwargs: fail fast if DB unreachable (10s),
+# send TCP keepalives so dead Supabase connections are detected within ~55s
+# instead of hanging until OS TCP timeout.
+_CONN_KWARGS = {
+    "connect_timeout": 10,
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 5,
+    "keepalives_count": 5,
+}
+
 
 def _get_pool():
     global _pool
     if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DB_URL)
+        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DB_URL, **_CONN_KWARGS)
     return _pool
 
 
 def _get_conn():
-    return _get_pool().getconn()
+    """Return a live connection from the pool.
+    Validates the connection with a quick SELECT 1; if dead, rebuilds the pool."""
+    global _pool
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        if conn.status != psycopg2.extensions.STATUS_READY:
+            conn.rollback()
+    except Exception:
+        try:
+            pool.putconn(conn)
+        except Exception:
+            pass
+        try:
+            pool.closeall()
+        except Exception:
+            pass
+        _pool = None
+        pool = _get_pool()
+        conn = pool.getconn()
+    return conn
 
 
 def _put_conn(conn):
     _get_pool().putconn(conn)
-
 
 def init_db():
     conn = _get_conn()
