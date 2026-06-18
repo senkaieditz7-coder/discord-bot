@@ -62,16 +62,39 @@ class Bot(commands.Bot):
             return
         await self.process_commands(message)
 
+    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
+        # Ignore unknown commands — user may have typed a non-bot $ message
+        if isinstance(error, commands.CommandNotFound):
+            return
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(f"Missing argument: `{error.param.name}`", delete_after=15)
+            return
+        if isinstance(error, commands.BadArgument):
+            await ctx.send(f"Bad argument: {error}", delete_after=15)
+            return
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send("You do not have permission to use this command.", delete_after=10)
+            return
+        if isinstance(error, commands.BotMissingPermissions):
+            await ctx.send(f"I am missing permissions: {error.missing_permissions}", delete_after=10)
+            return
+        # Log everything else so it shows up in Railway logs
+        print(f"[!] Prefix command error — {ctx.command} in #{ctx.channel} by {ctx.author}: {error}", flush=True)
+        try:
+            await ctx.send(f"An error occurred: {error}", delete_after=20)
+        except Exception as send_err:
+            print(f"[!] Could not send error reply: {send_err}", flush=True)
+
     async def on_app_command_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
         msg = f"An error occurred: {error}"
+        print(f"[!] Slash command error — /{interaction.command} by {interaction.user}: {error}", flush=True)
         try:
             if not interaction.response.is_done():
                 await interaction.response.send_message(msg, ephemeral=True)
             else:
                 await interaction.followup.send(msg, ephemeral=True)
-        except Exception:
-            pass
-        print(f"[!] Command error in {interaction.command}: {error}", flush=True)
+        except Exception as send_err:
+            print(f"[!] Could not send slash error reply: {send_err}", flush=True)
 
 
 async def main():
