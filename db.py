@@ -2,121 +2,127 @@ import os
 import asyncio
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 
 DB_URL = os.environ.get("SUPABASE_DB_URL")
-_executor = ThreadPoolExecutor(max_workers=5)
+
+_pool = None
+
+
+def _get_pool():
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DB_URL)
+    return _pool
 
 
 def _get_conn():
-    conn = psycopg2.connect(DB_URL)
-    conn.autocommit = False
-    return conn
+    return _get_pool().getconn()
 
 
-def _run(func):
-    """Run a synchronous db function in a thread executor."""
-    loop = asyncio.get_event_loop()
-    return loop.run_in_executor(_executor, func)
+def _put_conn(conn):
+    _get_pool().putconn(conn)
 
 
 def init_db():
     conn = _get_conn()
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS config (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS tickets (
-            id SERIAL PRIMARY KEY,
-            channel_id TEXT UNIQUE,
-            guild_id TEXT,
-            opener_id TEXT,
-            claimed_by TEXT,
-            status TEXT DEFAULT 'open',
-            ticket_type TEXT DEFAULT 'trade',
-            created_at TEXT,
-            closed_at TEXT,
-            transcript TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS ticket_users (
-            ticket_id INTEGER,
-            user_id TEXT,
-            PRIMARY KEY (ticket_id, user_id)
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS vouches (
-            id SERIAL PRIMARY KEY,
-            from_user TEXT,
-            to_user TEXT,
-            guild_id TEXT,
-            note TEXT,
-            created_at TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS deposits (
-            id SERIAL PRIMARY KEY,
-            user_id TEXT,
-            guild_id TEXT,
-            deposit_type TEXT,
-            amount TEXT,
-            note TEXT,
-            staff_id TEXT,
-            created_at TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS blacklist (
-            user_id TEXT,
-            guild_id TEXT,
-            reason TEXT,
-            added_by TEXT,
-            created_at TEXT,
-            PRIMARY KEY (user_id, guild_id)
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS automm_sessions (
-            id SERIAL PRIMARY KEY,
-            channel_id TEXT UNIQUE,
-            guild_id TEXT,
-            user1_id TEXT,
-            user2_id TEXT,
-            sender_id TEXT,
-            receiver_id TEXT,
-            payment_method TEXT,
-            state TEXT DEFAULT 'waiting_user2',
-            user1_ready INTEGER DEFAULT 0,
-            user2_ready INTEGER DEFAULT 0,
-            trade_done_1 INTEGER DEFAULT 0,
-            trade_done_2 INTEGER DEFAULT 0,
-            created_at TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS confirmations (
-            id SERIAL PRIMARY KEY,
-            channel_id TEXT,
-            guild_id TEXT,
-            user1_id TEXT,
-            user2_id TEXT,
-            user1_status TEXT DEFAULT 'pending',
-            user2_status TEXT DEFAULT 'pending',
-            message_id TEXT,
-            created_at TEXT,
-            resolved_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS tickets (
+                id SERIAL PRIMARY KEY,
+                channel_id TEXT UNIQUE,
+                guild_id TEXT,
+                opener_id TEXT,
+                claimed_by TEXT,
+                status TEXT DEFAULT 'open',
+                ticket_type TEXT DEFAULT 'trade',
+                created_at TEXT,
+                closed_at TEXT,
+                transcript TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS ticket_users (
+                ticket_id INTEGER,
+                user_id TEXT,
+                PRIMARY KEY (ticket_id, user_id)
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS vouches (
+                id SERIAL PRIMARY KEY,
+                from_user TEXT,
+                to_user TEXT,
+                guild_id TEXT,
+                note TEXT,
+                created_at TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS deposits (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT,
+                guild_id TEXT,
+                deposit_type TEXT,
+                amount TEXT,
+                note TEXT,
+                staff_id TEXT,
+                created_at TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS blacklist (
+                user_id TEXT,
+                guild_id TEXT,
+                reason TEXT,
+                added_by TEXT,
+                created_at TEXT,
+                PRIMARY KEY (user_id, guild_id)
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS automm_sessions (
+                id SERIAL PRIMARY KEY,
+                channel_id TEXT UNIQUE,
+                guild_id TEXT,
+                user1_id TEXT,
+                user2_id TEXT,
+                sender_id TEXT,
+                receiver_id TEXT,
+                payment_method TEXT,
+                state TEXT DEFAULT 'waiting_user2',
+                user1_ready INTEGER DEFAULT 0,
+                user2_ready INTEGER DEFAULT 0,
+                trade_done_1 INTEGER DEFAULT 0,
+                trade_done_2 INTEGER DEFAULT 0,
+                created_at TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS confirmations (
+                id SERIAL PRIMARY KEY,
+                channel_id TEXT,
+                guild_id TEXT,
+                user1_id TEXT,
+                user2_id TEXT,
+                user1_status TEXT DEFAULT 'pending',
+                user2_status TEXT DEFAULT 'pending',
+                message_id TEXT,
+                created_at TEXT,
+                resolved_at TEXT
+            )
+        """)
+        conn.commit()
+    finally:
+        _put_conn(conn)
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -129,7 +135,7 @@ def get_config(guild_id: str, key: str, default=None):
         row = c.fetchone()
         return row["value"] if row else default
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def set_config(guild_id: str, key: str, value: str):
@@ -142,7 +148,7 @@ def set_config(guild_id: str, key: str, value: str):
         )
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_all_config(guild_id: str) -> dict:
@@ -154,7 +160,7 @@ def get_all_config(guild_id: str) -> dict:
         prefix = f"{guild_id}:"
         return {r["key"][len(prefix):]: r["value"] for r in rows}
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 # ── Tickets ───────────────────────────────────────────────────────────────────
@@ -172,7 +178,7 @@ def create_ticket(channel_id, guild_id, opener_id, ticket_type="trade"):
         conn.commit()
         return tid
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_ticket(channel_id):
@@ -183,7 +189,7 @@ def get_ticket(channel_id):
         row = c.fetchone()
         return dict(row) if row else None
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_ticket_by_id(ticket_id):
@@ -194,7 +200,7 @@ def get_ticket_by_id(ticket_id):
         row = c.fetchone()
         return dict(row) if row else None
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def claim_ticket(channel_id, staff_id):
@@ -204,7 +210,7 @@ def claim_ticket(channel_id, staff_id):
         c.execute("UPDATE tickets SET claimed_by=%s WHERE channel_id=%s", (staff_id, channel_id))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def close_ticket(channel_id, transcript=""):
@@ -217,7 +223,7 @@ def close_ticket(channel_id, transcript=""):
         )
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def transfer_ticket(channel_id, new_mm_id):
@@ -227,7 +233,7 @@ def transfer_ticket(channel_id, new_mm_id):
         c.execute("UPDATE tickets SET claimed_by=%s WHERE channel_id=%s", (new_mm_id, channel_id))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def add_ticket_user(channel_id, user_id):
@@ -240,7 +246,7 @@ def add_ticket_user(channel_id, user_id):
             c.execute("INSERT INTO ticket_users (ticket_id, user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (row["id"], user_id))
             conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def remove_ticket_user(channel_id, user_id):
@@ -253,7 +259,7 @@ def remove_ticket_user(channel_id, user_id):
             c.execute("DELETE FROM ticket_users WHERE ticket_id=%s AND user_id=%s", (row["id"], user_id))
             conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_ticket_users(channel_id):
@@ -268,7 +274,7 @@ def get_ticket_users(channel_id):
         users = c.fetchall()
         return [u["user_id"] for u in users]
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_all_tickets(guild_id, status=None):
@@ -282,7 +288,7 @@ def get_all_tickets(guild_id, status=None):
         rows = c.fetchall()
         return [dict(r) for r in rows]
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 # ── Vouches ───────────────────────────────────────────────────────────────────
@@ -297,7 +303,7 @@ def add_vouch(from_user, to_user, guild_id, note=""):
         )
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_vouches(user_id, guild_id):
@@ -308,7 +314,7 @@ def get_vouches(user_id, guild_id):
         rows = c.fetchall()
         return [dict(r) for r in rows]
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def count_vouches(user_id, guild_id):
@@ -319,7 +325,7 @@ def count_vouches(user_id, guild_id):
         row = c.fetchone()
         return row["cnt"] if row else 0
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def has_vouched_recently(from_user, to_user, guild_id, hours=24):
@@ -335,7 +341,7 @@ def has_vouched_recently(from_user, to_user, guild_id, hours=24):
         row = c.fetchone()
         return (row["cnt"] if row else 0) > 0
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def set_vouches(user_id, guild_id, count):
@@ -350,7 +356,7 @@ def set_vouches(user_id, guild_id, count):
             )
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def delete_vouch(vouch_id):
@@ -360,7 +366,7 @@ def delete_vouch(vouch_id):
         c.execute("DELETE FROM vouches WHERE id=%s", (vouch_id,))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def delete_latest_vouch(from_user, to_user, guild_id):
@@ -377,7 +383,7 @@ def delete_latest_vouch(from_user, to_user, guild_id):
             conn.commit()
         return bool(row)
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 # ── Deposits ──────────────────────────────────────────────────────────────────
@@ -392,7 +398,7 @@ def add_deposit(user_id, guild_id, deposit_type, amount, note, staff_id):
         )
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_deposits(user_id, guild_id):
@@ -403,7 +409,7 @@ def get_deposits(user_id, guild_id):
         rows = c.fetchall()
         return [dict(r) for r in rows]
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def delete_deposit(deposit_id):
@@ -413,7 +419,7 @@ def delete_deposit(deposit_id):
         c.execute("DELETE FROM deposits WHERE id=%s", (deposit_id,))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 # ── Blacklist ─────────────────────────────────────────────────────────────────
@@ -428,7 +434,7 @@ def blacklist_user(user_id, guild_id, reason, added_by):
         )
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def unblacklist_user(user_id, guild_id):
@@ -438,7 +444,7 @@ def unblacklist_user(user_id, guild_id):
         c.execute("DELETE FROM blacklist WHERE user_id=%s AND guild_id=%s", (user_id, guild_id))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def is_blacklisted(user_id, guild_id):
@@ -449,7 +455,7 @@ def is_blacklisted(user_id, guild_id):
         row = c.fetchone()
         return dict(row) if row else None
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 # ── Confirmations ─────────────────────────────────────────────────────────────
@@ -466,7 +472,7 @@ def create_confirmation(channel_id, guild_id, user1_id, user2_id):
         conn.commit()
         return row["id"]
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def update_confirmation(conf_id, message_id=None, user1_status=None, user2_status=None):
@@ -481,7 +487,7 @@ def update_confirmation(conf_id, message_id=None, user1_status=None, user2_statu
             c.execute("UPDATE confirmations SET user2_status=%s WHERE id=%s", (user2_status, conf_id))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def resolve_confirmation(conf_id):
@@ -491,7 +497,7 @@ def resolve_confirmation(conf_id):
         c.execute("UPDATE confirmations SET resolved_at=%s WHERE id=%s", (datetime.utcnow().isoformat(), conf_id))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_confirmation(conf_id):
@@ -502,7 +508,7 @@ def get_confirmation(conf_id):
         row = c.fetchone()
         return dict(row) if row else None
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 # ── Auto MM Sessions ──────────────────────────────────────────────────────────
@@ -517,7 +523,7 @@ def create_automm_session(channel_id, guild_id, user1_id):
         )
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_automm_session(channel_id):
@@ -528,7 +534,7 @@ def get_automm_session(channel_id):
         row = c.fetchone()
         return dict(row) if row else None
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def get_automm_session_by_sender(guild_id, sender_id):
@@ -542,7 +548,7 @@ def get_automm_session_by_sender(guild_id, sender_id):
         row = c.fetchone()
         return dict(row) if row else None
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def update_automm_session(channel_id, **kwargs):
@@ -553,7 +559,7 @@ def update_automm_session(channel_id, **kwargs):
             c.execute(f"UPDATE automm_sessions SET {key}=%s WHERE channel_id=%s", (value, channel_id))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 def delete_automm_session(channel_id):
@@ -563,7 +569,7 @@ def delete_automm_session(channel_id):
         c.execute("DELETE FROM automm_sessions WHERE channel_id=%s", (channel_id,))
         conn.commit()
     finally:
-        conn.close()
+        _put_conn(conn)
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
@@ -590,4 +596,4 @@ def get_stats(guild_id):
             "total_deposits": total_deposits,
         }
     finally:
-        conn.close()
+        _put_conn(conn)
