@@ -20,7 +20,7 @@ def _parse_link_buttons(raw: str) -> list:
 
 
 async def _add_link_buttons(view: discord.ui.View, guild_id, btn_key):
-    cfg = db.get_all_config(str(guild_id))
+    cfg = await asyncio.to_thread(db.get_all_config, str(guild_id))
     buttons = _parse_link_buttons(cfg.get(btn_key, ""))
     for label, url in buttons:
         view.add_item(discord.ui.Button(
@@ -65,7 +65,7 @@ class TradeTicketModal(discord.ui.Modal):
             await interaction.followup.send("Failed to create ticket.", ephemeral=True)
             return
 
-        cfg = db.get_all_config(str(interaction.guild_id))
+        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         q1 = cfg.get("ticket_q1") or "What is the trade?"
         q2 = cfg.get("ticket_q2") or "Other user (ID, @mention, or username)"
         q3 = cfg.get("ticket_q3") or "Can you join private servers using links?"
@@ -112,7 +112,7 @@ class SupportTicketModal(discord.ui.Modal):
             await interaction.followup.send("Failed to create ticket.", ephemeral=True)
             return
 
-        cfg = db.get_all_config(str(interaction.guild_id))
+        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         q1 = cfg.get("support_q1") or "What would you like help with?"
         q2 = cfg.get("support_q2") or "How urgent is this? (1-10)"
 
@@ -188,10 +188,11 @@ class OpenTradeTicketView(discord.ui.View):
 
     @discord.ui.button(label="Open Trade Ticket", style=discord.ButtonStyle.green, custom_id="panel_open_trade", emoji="🎫")
     async def open_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if db.is_blacklisted(str(interaction.user.id), str(interaction.guild_id)):
+        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
+        if bl:
             await interaction.response.send_message("You are blacklisted from opening tickets.", ephemeral=True)
             return
-        cfg = db.get_all_config(str(interaction.guild_id))
+        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         await interaction.response.send_modal(TradeTicketModal(interaction.guild_id, cfg))
 
 
@@ -201,10 +202,11 @@ class OpenSupportTicketView(discord.ui.View):
 
     @discord.ui.button(label="Open Support Ticket", style=discord.ButtonStyle.blurple, custom_id="panel_open_support", emoji="🆘")
     async def open_support(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if db.is_blacklisted(str(interaction.user.id), str(interaction.guild_id)):
+        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
+        if bl:
             await interaction.response.send_message("You are blacklisted from opening tickets.", ephemeral=True)
             return
-        cfg = db.get_all_config(str(interaction.guild_id))
+        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         await interaction.response.send_modal(SupportTicketModal(interaction.guild_id, cfg))
 
 
@@ -214,15 +216,16 @@ class AutoMMView(discord.ui.View):
 
     @discord.ui.button(label="Request Auto-MM", style=discord.ButtonStyle.green, custom_id="panel_open_automm", emoji="🤖")
     async def open_automm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if db.is_blacklisted(str(interaction.user.id), str(interaction.guild_id)):
+        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
+        if bl:
             await interaction.response.send_message("You are blacklisted from opening tickets.", ephemeral=True)
             return
 
         from cogs.automm import _parse_dropdown_options
 
-        cfg           = db.get_all_config(str(interaction.guild_id))
+        cfg           = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         dropdown_label = cfg.get("automm_dropdown_label") or "What service do you need?"
-        options        = _parse_dropdown_options(str(interaction.guild_id))
+        options        = await asyncio.to_thread(_parse_dropdown_options, str(interaction.guild_id))
 
         embed = discord.Embed(
             title="🤖 Auto Middleman",
@@ -241,7 +244,7 @@ class Panels(commands.Cog):
         self.bot.add_view(AutoMMView())
 
     async def _make_embed(self, guild_id, cfg_prefix, default_title, default_desc):
-        cfg    = db.get_all_config(str(guild_id))
+        cfg    = await asyncio.to_thread(db.get_all_config, str(guild_id))
         title  = cfg.get(f"{cfg_prefix}_title")  or default_title
         desc   = cfg.get(f"{cfg_prefix}_desc")   or default_desc
         footer = cfg.get(f"{cfg_prefix}_footer", "")
