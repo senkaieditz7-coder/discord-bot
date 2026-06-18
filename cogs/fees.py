@@ -83,6 +83,32 @@ class Fees(commands.Cog):
         view = FeeSplitView(str(interaction.guild_id))
         await interaction.response.send_message(embed=embed, view=view)
 
+    # ── Prefix Command ────────────────────────────────────────────────────────
+
+    @commands.command(name="fees")
+    async def fees_prefix(self, ctx: commands.Context):
+        """Post the middleman service fee embed with split options."""
+        cfg = db.get_all_config(str(ctx.guild.id))
+
+        title = cfg.get("fees_title") or "Middleman Service Fee"
+        desc = cfg.get("fees_desc") or (
+            "Your items are currently being held by the middleman.\n\n"
+            "The MM will list the service fee price in chat. "
+            "Please discuss with the other trader whether to split the fee or have one side cover it fully.\n\n"
+            "⚠️ **Once you click a button, you can't redo it.**"
+        )
+        footer = cfg.get("fees_footer", "")
+        image  = cfg.get("fees_image",  "")
+
+        embed = discord.Embed(title=title, description=desc, color=discord.Color.green())
+        if footer:
+            embed.set_footer(text=footer)
+        if image:
+            embed.set_image(url=image)
+
+        view = FeeSplitView(str(ctx.guild.id))
+        await ctx.send(embed=embed, view=view)
+
 
 async def setup(bot):
     await bot.add_cog(Fees(bot))

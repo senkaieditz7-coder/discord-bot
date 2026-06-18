@@ -5,49 +5,52 @@ from discord import app_commands
 
 COMMANDS = {
     "🎫 Tickets": [
-        ("/claim", "Claim this ticket as MM staff"),
-        ("/close", "Close and delete this ticket channel"),
-        ("/adduser @user", "Add a user to this ticket"),
-        ("/removeuser @user", "Remove a user from this ticket"),
-        ("/transfer @mm", "Transfer this ticket to another middleman"),
+        ("/claim  or  $claim", "Claim this ticket as MM staff"),
+        ("/close  or  $close", "Close and delete this ticket channel"),
+        ("/adduser @user  or  $adduser @user", "Add a user to this ticket"),
+        ("/removeuser @user  or  $removeuser @user", "Remove a user from this ticket"),
+        ("/transfer @mm  or  $transfer @mm", "Transfer this ticket to another middleman"),
     ],
     "✅ Trade Confirmation": [
-        ("/confirm @user1 @user2", "Send a trade confirmation to two traders — both must accept or decline"),
+        ("/confirm @user1 @user2  or  $confirm @user1 @user2", "Send a trade confirmation to two traders — both must accept or decline"),
     ],
     "⭐ Vouches": [
-        ("/vouch @user [note]", "Leave a vouch for a user after a trade (24h spam protection)"),
-        ("/rep [@user]", "Check a user's reputation and vouch count"),
-        ("/setvouches @user count", "[Staff] Manually set a user's vouch count"),
-        ("/deletevouch @user @voucher", "[Staff] Delete the latest vouch from one user to another"),
+        ("/vouch @user [note]  or  $vouch @user [note]", "Leave a vouch for a user after a trade (24h spam protection)"),
+        ("/rep [@user]  or  $rep [@user]", "Check a user's reputation and vouch count"),
+        ("/setvouches @user count  or  $setvouches @user count", "[Staff] Manually set a user's vouch count"),
+        ("/deletevouch @user @voucher  or  $deletevouch @user @voucher", "[Staff] Delete the latest vouch from one user to another"),
     ],
     "💰 Deposits": [
-        ("/depositset @user type", "[MM+] Log a deposit (In-Game / Real Money / Custom)"),
-        ("/depositcheck @user", "[Staff] View full deposit history for a user"),
-        ("/depositdelete @user id", "[Staff] Delete a deposit record by ID"),
+        ("/depositset @user type", "[MM+] Log a deposit (In-Game / Real Money / Custom) — slash only"),
+        ("/depositcheck @user  or  $depositcheck @user", "[Staff] View full deposit history for a user"),
+        ("/depositdelete @user id  or  $depositdelete @user id", "[Staff] Delete a deposit record by ID"),
     ],
     "🛡️ Admin": [
-        ("/blacklist @user [reason]", "[Admin] Blacklist a user from opening tickets"),
-        ("/unblacklist @user", "[Admin] Remove a user from the blacklist"),
-        ("/tradeinfo [channel]", "[Staff] View details on a trade ticket"),
-        ("/stats", "[Staff] View full bot statistics"),
-        ("/purge amount", "[Admin] Bulk delete 1–100 messages in a channel"),
-        ("/say message [channel] [embed_title] [embed_color] [image_url] [anonymous] [button_label] [button_url]", "[Admin] Send a plain message or styled embed — optional link button"),
-        ("/aboutus", "Display the About Us embed"),
+        ("/blacklist @user [reason]  or  $blacklist @user [reason]", "[Admin] Blacklist a user from opening tickets"),
+        ("/unblacklist @user  or  $unblacklist @user", "[Admin] Remove a user from the blacklist"),
+        ("/tradeinfo [channel]  or  $tradeinfo", "[Staff] View details on a trade ticket"),
+        ("/stats  or  $stats", "[Staff] View full bot statistics"),
+        ("/purge amount  or  $purge [amount]", "[Admin] Bulk delete 1–100 messages in a channel"),
+        ("/say message ...  or  $say message", "[Admin] Send a message as the bot"),
+        ("/aboutus  or  $aboutus", "Display the About Us embed"),
     ],
     "💸 Fees": [
-        ("/fees amount", "Calculate and display the middleman fee for a trade value"),
+        ("/fees  or  $fees", "Post the middleman fee embed with split options"),
     ],
     "🎛️ Bot Config": [
-        ("/botedit", "[Bot Owner only] Edit all bot settings — roles, channels, panels, modals, and more"),
+        ("/botedit", "[Bot Owner only] Edit all bot settings — roles, channels, panels, modals, and more — slash only"),
         ("/botrestart", "[Bot Owner only] Restart the bot process"),
     ],
     "🎨 Panels": [
-        ("/ticketpanel", "[Staff] Post the trade ticket panel — users fill in a form before ticket is created"),
-        ("/supportpanel", "[Staff] Post the support ticket panel — users fill in a form before ticket is created"),
-        ("/autommpanel", "[Staff] Post the Auto MM panel — users pick a service from a dropdown"),
+        ("/ticketpanel", "[Staff] Post the trade ticket panel — slash only"),
+        ("/supportpanel", "[Staff] Post the support ticket panel — slash only"),
+        ("/autommpanel", "[Staff] Post the Auto MM panel — slash only"),
     ],
     "🌟 Mercy": [
-        ("/mercy @user", "[Staff] Send a mercy/special invite embed to a user with Accept/Decline buttons"),
+        ("/mercy @user  or  $mercy @user", "[Staff] Send a mercy/special invite embed to a user with Accept/Decline buttons"),
+    ],
+    "🎭 Fill": [
+        ("/fill  or  $fill", "Grant yourself all roles below your highest role that you don't already have"),
     ],
     "🤖 Auto MM": [
         ("Open ticket from panel", "Select a service from the dropdown → MM is pinged → bot walks you through the trade"),
@@ -93,7 +96,8 @@ class Help(commands.Cog):
         embed = discord.Embed(
             title="📖 Bot Help",
             description=(
-                "Use the dropdown below to browse commands by category.\n\n"
+                "Use the dropdown below to browse commands by category.\n"
+                "Most commands support both `/slash` and `$prefix` syntax.\n\n"
                 + "\n".join(
                     f"**{cat}** — {len(cmds)} command(s)"
                     for cat, cmds in COMMANDS.items()
@@ -103,6 +107,24 @@ class Help(commands.Cog):
         )
         embed.set_footer(text="Select a category to see detailed commands.")
         await interaction.response.send_message(embed=embed, view=HelpView(), ephemeral=True)
+
+    @commands.command(name="help")
+    async def help_prefix(self, ctx: commands.Context):
+        """Display all bot commands."""
+        embed = discord.Embed(
+            title="📖 Bot Help",
+            description=(
+                "Use the dropdown below to browse commands by category.\n"
+                "Most commands support both `/slash` and `$prefix` syntax.\n\n"
+                + "\n".join(
+                    f"**{cat}** — {len(cmds)} command(s)"
+                    for cat, cmds in COMMANDS.items()
+                )
+            ),
+            color=discord.Color.blurple()
+        )
+        embed.set_footer(text="Select a category to see detailed commands.")
+        await ctx.send(embed=embed, view=HelpView())
 
 
 async def setup(bot):

@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 import db
 
 
@@ -150,14 +151,13 @@ CATEGORIES = {
 
 
 class BotEditModal(discord.ui.Modal):
-    def __init__(self, guild_id: str, category_key: str):
+    def __init__(self, guild_id: str, category_key: str, current: dict):
         cat = CATEGORIES[category_key]
         super().__init__(title=f"Edit — {cat['label']}"[:45])
         self.guild_id     = guild_id
         self.category_key = category_key
         self.field_inputs = []
 
-        current = db.get_all_config(guild_id)
         for config_key, label in cat["fields"]:
             use_paragraph = (
                 "message" in config_key
@@ -178,10 +178,11 @@ class BotEditModal(discord.ui.Modal):
             self.field_inputs.append((config_key, inp))
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         for config_key, inp in self.field_inputs:
-            db.set_config(self.guild_id, config_key, inp.value)
+            await asyncio.to_thread(db.set_config, self.guild_id, config_key, inp.value)
         cat = CATEGORIES[self.category_key]
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ **{cat['label']}** settings updated successfully! Changes take effect immediately.",
             ephemeral=True
         )
@@ -198,7 +199,8 @@ class CategorySelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         category_key = self.values[0]
-        modal = BotEditModal(self.guild_id, category_key)
+        current = await asyncio.to_thread(db.get_all_config, self.guild_id)
+        modal = BotEditModal(self.guild_id, category_key, current)
         await interaction.response.send_modal(modal)
 
 

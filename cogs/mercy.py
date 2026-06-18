@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 import db
 
 
@@ -39,7 +40,7 @@ class MercyView(discord.ui.View):
             embed.add_field(name="Role Granted", value=role.mention)
         await interaction.response.edit_message(embed=embed, view=None)
 
-        cfg = await db.get_all_config(str(interaction.guild_id))
+        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         dm_title = cfg.get("mercy_dm_title", "").strip() or "🎉 Mercy Invite Accepted"
         dm_body = cfg.get("mercy_dm_body", "").strip() or (
             f"Welcome! Your mercy invite from **{interaction.guild.name}** has been accepted "
@@ -99,7 +100,7 @@ class Mercy(commands.Cog):
             await interaction.followup.send("Cannot send mercy invites to bots.", ephemeral=True)
             return
 
-        cfg = await db.get_all_config(str(interaction.guild_id))
+        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         mercy_role_id_str = cfg.get("mercy_role", "")
         mercy_message = cfg.get("mercy_message", "You have been selected for a special opportunity. Do you accept?")
 
@@ -118,7 +119,39 @@ class Mercy(commands.Cog):
         view = MercyView(interaction.user, user, role_id)
         await interaction.followup.send(content=user.mention, embed=embed, view=view)
 
+    # ── Prefix Command ────────────────────────────────────────────────────────
+
+    @commands.command(name="mercy")
+    async def mercy_prefix(self, ctx: commands.Context, user: discord.Member):
+        """Send a mercy/special invite embed to a user."""
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff can send mercy invites.", delete_after=10)
+            return
+
+        if user.bot:
+            await ctx.send("Cannot send mercy invites to bots.", delete_after=10)
+            return
+
+        cfg = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
+        mercy_role_id_str = cfg.get("mercy_role", "")
+        mercy_message = cfg.get("mercy_message", "You have been selected for a special opportunity. Do you accept?")
+
+        role_id = int(mercy_role_id_str) if mercy_role_id_str.isdigit() else 0
+        role = ctx.guild.get_role(role_id) if role_id else None
+
+        embed = discord.Embed(
+            title="🌟 You've Been Invited",
+            description=f"{user.mention}\n\n{mercy_message}",
+            color=discord.Color.purple()
+        )
+        embed.set_footer(text=f"Invited by {ctx.author}")
+        if role:
+            embed.add_field(name="Role on Acceptance", value=role.mention)
+
+        view = MercyView(ctx.author, user, role_id)
+        await ctx.send(content=user.mention, embed=embed, view=view)
+
 
 async def setup(bot):
     await bot.add_cog(Mercy(bot))
-    

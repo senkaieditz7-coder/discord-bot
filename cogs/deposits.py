@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from discord.app_commands import Choice
+import asyncio
 import db
 
 
@@ -25,11 +26,13 @@ class IngameDepositModal(discord.ui.Modal, title="Log In-Game Deposit"):
         self.target_user = user
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         date_str = self.date.value.strip() or "Not specified"
         amount_str = f"{self.item.value} ({self.game.value})"
         note_str   = f"Value: {self.value.value} | Date: {date_str}"
 
-        await db.add_deposit(
+        await asyncio.to_thread(
+            db.add_deposit,
             str(self.target_user.id),
             str(interaction.guild_id),
             "ingame",
@@ -47,13 +50,13 @@ class IngameDepositModal(discord.ui.Modal, title="Log In-Game Deposit"):
         embed.add_field(name="Date",  value=date_str,                 inline=True)
         embed.set_footer(text=f"Logged by {interaction.user}")
 
-        deposit_log_id = await db.get_config(str(interaction.guild_id), "deposit_log_channel")
+        deposit_log_id = await asyncio.to_thread(db.get_config, str(interaction.guild_id), "deposit_log_channel")
         if deposit_log_id:
             lc = interaction.guild.get_channel(int(deposit_log_id))
             if lc:
                 await lc.send(embed=embed)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 class GeneralDepositModal(discord.ui.Modal, title="Log Deposit"):
@@ -67,12 +70,14 @@ class GeneralDepositModal(discord.ui.Modal, title="Log Deposit"):
         self.deposit_type = deposit_type
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         date_str = self.date.value.strip() or "Not specified"
         note_str = f"Date: {date_str}"
         if self.note.value:
             note_str += f" | {self.note.value}"
 
-        await db.add_deposit(
+        await asyncio.to_thread(
+            db.add_deposit,
             str(self.target_user.id),
             str(interaction.guild_id),
             self.deposit_type,
@@ -91,13 +96,13 @@ class GeneralDepositModal(discord.ui.Modal, title="Log Deposit"):
             embed.add_field(name="Note", value=self.note.value, inline=False)
         embed.set_footer(text=f"Logged by {interaction.user}")
 
-        deposit_log_id = await db.get_config(str(interaction.guild_id), "deposit_log_channel")
+        deposit_log_id = await asyncio.to_thread(db.get_config, str(interaction.guild_id), "deposit_log_channel")
         if deposit_log_id:
             lc = interaction.guild.get_channel(int(deposit_log_id))
             if lc:
                 await lc.send(embed=embed)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
@@ -128,7 +133,7 @@ class Deposits(commands.Cog):
             await interaction.followup.send("Only staff can check deposits.", ephemeral=True)
             return
 
-        deposits = await db.get_deposits(str(user.id), str(interaction.guild_id))
+        deposits = await asyncio.to_thread(db.get_deposits, str(user.id), str(interaction.guild_id))
         if not deposits:
             await interaction.followup.send(
                 embed=discord.Embed(
@@ -169,13 +174,58 @@ class Deposits(commands.Cog):
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only staff can delete deposits.", ephemeral=True)
             return
-        await db.delete_deposit(deposit_id)
+        await asyncio.to_thread(db.delete_deposit, deposit_id)
         await interaction.followup.send(
             f"Deposit `#{deposit_id}` for {user.mention} has been deleted.",
             ephemeral=True
         )
 
+    # ── Prefix Commands ───────────────────────────────────────────────────────
+
+    @commands.command(name="depositcheck")
+    async def depositcheck_prefix(self, ctx: commands.Context, user: discord.Member):
+        """View deposit history for a user."""
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only staff can check deposits.", delete_after=10)
+            return
+
+        deposits = await asyncio.to_thread(db.get_deposits, str(user.id), str(ctx.guild.id))
+        if not deposits:
+            await ctx.send(embed=discord.Embed(
+                description=f"❌ No deposit records found for **{user.display_name}**.",
+                color=discord.Color.red()
+            ))
+            return
+
+        type_labels = {"ingame": "In-Game", "realmoney": "Real Money", "custom": "Custom"}
+        embed = discord.Embed(title=f"Deposit History — {user.display_name}", color=discord.Color.gold())
+        embed.set_thumbnail(url=user.display_avatar.url)
+
+        for d in deposits[:10]:
+            staff = ctx.guild.get_member(int(d["staff_id"]))
+            staff_name = staff.display_name if staff else f"<@{d['staff_id']}>"
+            label = type_labels.get(d["deposit_type"], d["deposit_type"])
+            val = f"**{d['amount']}**\nType: {label}\nBy: {staff_name}"
+            if d.get("note"):
+                val += f"\n{d['note']}"
+            embed.add_field(name=f"Deposit #{d['id']}", value=val, inline=False)
+
+        if len(deposits) > 10:
+            embed.set_footer(text=f"Showing 10 of {len(deposits)} deposits.")
+
+        await ctx.send(embed=embed)
+
+    @commands.command(name="depositdelete")
+    async def depositdelete_prefix(self, ctx: commands.Context, user: discord.Member, deposit_id: int):
+        """Delete a deposit record by ID."""
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only staff can delete deposits.", delete_after=10)
+            return
+        await asyncio.to_thread(db.delete_deposit, deposit_id)
+        await ctx.send(f"Deposit `#{deposit_id}` for {user.mention} has been deleted.")
+
 
 async def setup(bot):
     await bot.add_cog(Deposits(bot))
-        

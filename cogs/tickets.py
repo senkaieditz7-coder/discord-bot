@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 import db
 from cogs.transcripts import save_transcript, build_html_transcript
 
@@ -307,6 +308,89 @@ class Tickets(commands.Cog):
             color=discord.Color.orange()
         )
         await interaction.followup.send(embed=embed)
+
+    # ── Prefix Commands ───────────────────────────────────────────────────────
+
+    @commands.command(name="claim")
+    async def claim_prefix(self, ctx: commands.Context):
+        """Claim this ticket as MM staff."""
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff can claim tickets.", delete_after=10)
+            return
+        ticket = db.get_ticket(str(ctx.channel.id))
+        if not ticket:
+            await ctx.send("This is not a ticket channel.", delete_after=10)
+            return
+        if ticket["claimed_by"]:
+            claimer = ctx.guild.get_member(int(ticket["claimed_by"]))
+            name = claimer.mention if claimer else f"<@{ticket['claimed_by']}>"
+            await ctx.send(f"Already claimed by {name}.")
+            return
+        db.claim_ticket(str(ctx.channel.id), str(ctx.author.id))
+        await ctx.send(embed=discord.Embed(
+            title="Ticket Claimed",
+            description=f"{ctx.author.mention} has claimed this ticket.",
+            color=discord.Color.green()
+        ))
+
+    @commands.command(name="close")
+    async def close_prefix(self, ctx: commands.Context):
+        """Close and delete this ticket channel."""
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff can close tickets.", delete_after=10)
+            return
+        ticket = db.get_ticket(str(ctx.channel.id))
+        if not ticket:
+            await ctx.send("This is not a ticket channel.", delete_after=10)
+            return
+        await ctx.send("Closing ticket…")
+        await close_ticket_channel(ctx.channel, ctx.guild, ctx.author)
+
+    @commands.command(name="adduser")
+    async def adduser_prefix(self, ctx: commands.Context, user: discord.Member):
+        """Add a user to this ticket."""
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff can add users.", delete_after=10)
+            return
+        ticket = db.get_ticket(str(ctx.channel.id))
+        if not ticket:
+            await ctx.send("This is not a ticket channel.", delete_after=10)
+            return
+        await ctx.channel.set_permissions(user, read_messages=True, send_messages=True)
+        db.add_ticket_user(str(ctx.channel.id), str(user.id))
+        await ctx.send(f"Added {user.mention} to the ticket.")
+
+    @commands.command(name="removeuser")
+    async def removeuser_prefix(self, ctx: commands.Context, user: discord.Member):
+        """Remove a user from this ticket."""
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff can remove users.", delete_after=10)
+            return
+        ticket = db.get_ticket(str(ctx.channel.id))
+        if not ticket:
+            await ctx.send("This is not a ticket channel.", delete_after=10)
+            return
+        await ctx.channel.set_permissions(user, overwrite=None)
+        db.remove_ticket_user(str(ctx.channel.id), str(user.id))
+        await ctx.send(f"Removed {user.mention} from the ticket.")
+
+    @commands.command(name="transfer")
+    async def transfer_prefix(self, ctx: commands.Context, mm: discord.Member):
+        """Transfer this ticket to another middleman."""
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff can transfer tickets.", delete_after=10)
+            return
+        ticket = db.get_ticket(str(ctx.channel.id))
+        if not ticket:
+            await ctx.send("This is not a ticket channel.", delete_after=10)
+            return
+        db.transfer_ticket(str(ctx.channel.id), str(mm.id))
+        await ctx.channel.set_permissions(mm, read_messages=True, send_messages=True)
+        await ctx.send(embed=discord.Embed(
+            title="Ticket Transferred",
+            description=f"This ticket has been transferred to {mm.mention} by {ctx.author.mention}.",
+            color=discord.Color.orange()
+        ))
 
 
 async def setup(bot):
