@@ -5,7 +5,7 @@ import psycopg2.extras
 import psycopg2.pool
 from datetime import datetime
 
-DB_URL = os.environ.get("SUPABASE_DB_URL")
+DB_URL = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
 
 _pool = None
 
