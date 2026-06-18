@@ -57,6 +57,11 @@ class Bot(commands.Bot):
     async def on_guild_join(self, guild: discord.Guild):
         print(f"[+] Joined guild: {guild.name} ({guild.id})")
 
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+        await self.process_commands(message)
+
     async def on_app_command_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
         msg = f"An error occurred: {error}"
         try:
