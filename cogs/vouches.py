@@ -5,6 +5,14 @@ import asyncio
 import db
 
 
+def _vouch_from_name(guild: discord.Guild, from_user: str) -> str:
+    """Safely resolve a from_user field — handles 'system' and other non-ID strings."""
+    if from_user.isdigit():
+        member = guild.get_member(int(from_user))
+        return member.mention if member else f"<@{from_user}>"
+    return f"`{from_user}`"
+
+
 class Vouches(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -69,10 +77,9 @@ class Vouches(commands.Cog):
             recent = vouches[:5]
             lines  = []
             for v in recent:
-                from_member = interaction.guild.get_member(int(v["from_user"]))
-                from_name   = from_member.mention if from_member else f"<@{v['from_user']}>"
-                note_part   = f" — *{v['note']}*" if v.get("note") else ""
-                date        = v["created_at"][:10]
+                from_name = _vouch_from_name(interaction.guild, v["from_user"])
+                note_part = f" — *{v['note']}*" if v.get("note") else ""
+                date      = v["created_at"][:10]
                 lines.append(f"{from_name}{note_part} `{date}`")
             embed.add_field(name="Recent Vouches", value="\n".join(lines), inline=False)
 
@@ -147,9 +154,9 @@ class Vouches(commands.Cog):
         image  = cfg.get("vouch_image")  or ""
 
         embed = discord.Embed(title=title, color=discord.Color.yellow())
-        embed.add_field(name="Vouched For",   value=user.mention,    inline=True)
-        embed.add_field(name="By",            value=ctx.author.mention, inline=True)
-        embed.add_field(name="Total Vouches", value=f"⭐ {count}",    inline=True)
+        embed.add_field(name="Vouched For",   value=user.mention,       inline=True)
+        embed.add_field(name="By",            value=ctx.author.mention,  inline=True)
+        embed.add_field(name="Total Vouches", value=f"⭐ {count}",        inline=True)
         if note:
             embed.add_field(name="Note", value=note, inline=False)
         if footer:
@@ -173,10 +180,9 @@ class Vouches(commands.Cog):
         if vouches:
             lines = []
             for v in vouches[:5]:
-                fm = ctx.guild.get_member(int(v["from_user"]))
-                fn = fm.mention if fm else f"<@{v['from_user']}>"
+                from_name = _vouch_from_name(ctx.guild, v["from_user"])
                 note_part = f" — *{v['note']}*" if v.get("note") else ""
-                lines.append(f"{fn}{note_part} `{v['created_at'][:10]}`")
+                lines.append(f"{from_name}{note_part} `{v['created_at'][:10]}`")
             embed.add_field(name="Recent Vouches", value="\n".join(lines), inline=False)
 
         await ctx.send(embed=embed)
