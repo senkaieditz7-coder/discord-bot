@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 import db
 
 
@@ -62,7 +63,8 @@ class Fees(commands.Cog):
 
     @app_commands.command(name="fees", description="Post the middleman service fee embed with split options")
     async def fees(self, interaction: discord.Interaction):
-        cfg = db.get_all_config(str(interaction.guild_id))
+        await interaction.response.defer()
+        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
 
         title = cfg.get("fees_title") or "Middleman Service Fee"
         desc = cfg.get("fees_desc") or (
@@ -81,14 +83,14 @@ class Fees(commands.Cog):
             embed.set_image(url=image)
 
         view = FeeSplitView(str(interaction.guild_id))
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.followup.send(embed=embed, view=view)
 
     # ── Prefix Command ────────────────────────────────────────────────────────
 
     @commands.command(name="fees")
     async def fees_prefix(self, ctx: commands.Context):
         """Post the middleman service fee embed with split options."""
-        cfg = db.get_all_config(str(ctx.guild.id))
+        cfg = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
 
         title = cfg.get("fees_title") or "Middleman Service Fee"
         desc = cfg.get("fees_desc") or (
