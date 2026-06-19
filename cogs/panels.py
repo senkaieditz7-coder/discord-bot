@@ -50,12 +50,20 @@ class TradeTicketModal(discord.ui.Modal):
         self.add_item(self.ans3)
 
     async def on_submit(self, interaction: discord.Interaction):
-        cog = interaction.client.get_cog("Tickets")
-        if not cog:
-            await interaction.response.send_message("Ticket system unavailable.", ephemeral=True)
+        # Defer FIRST — must respond within 3 seconds
+        await interaction.response.defer(ephemeral=True)
+
+        # Blacklist check happens here (after defer, no timeout risk)
+        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
+        if bl:
+            await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
+        cog = interaction.client.get_cog("Tickets")
+        if not cog:
+            await interaction.followup.send("Ticket system unavailable.", ephemeral=True)
+            return
+
         channel, err = await cog.open_ticket(interaction.guild, interaction.user, "trade")
 
         if err == "blacklisted":
@@ -97,12 +105,20 @@ class SupportTicketModal(discord.ui.Modal):
         self.add_item(self.ans2)
 
     async def on_submit(self, interaction: discord.Interaction):
-        cog = interaction.client.get_cog("Tickets")
-        if not cog:
-            await interaction.response.send_message("Ticket system unavailable.", ephemeral=True)
+        # Defer FIRST — must respond within 3 seconds
+        await interaction.response.defer(ephemeral=True)
+
+        # Blacklist check happens here (after defer, no timeout risk)
+        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
+        if bl:
+            await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
             return
 
-        await interaction.response.defer(ephemeral=True)
+        cog = interaction.client.get_cog("Tickets")
+        if not cog:
+            await interaction.followup.send("Ticket system unavailable.", ephemeral=True)
+            return
+
         channel, err = await cog.open_ticket(interaction.guild, interaction.user, "support")
 
         if err == "blacklisted":
@@ -188,10 +204,8 @@ class OpenTradeTicketView(discord.ui.View):
 
     @discord.ui.button(label="Open Trade Ticket", style=discord.ButtonStyle.green, custom_id="panel_open_trade", emoji="🎫")
     async def open_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
-        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
-        if bl:
-            await interaction.response.send_message("You are blacklisted from opening tickets.", ephemeral=True)
-            return
+        # Fetch config to build modal with custom labels — can't defer before send_modal
+        # This DB call is typically <100ms; blacklist check moved to modal on_submit
         cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         await interaction.response.send_modal(TradeTicketModal(interaction.guild_id, cfg))
 
@@ -202,10 +216,8 @@ class OpenSupportTicketView(discord.ui.View):
 
     @discord.ui.button(label="Open Support Ticket", style=discord.ButtonStyle.blurple, custom_id="panel_open_support", emoji="🆘")
     async def open_support(self, interaction: discord.Interaction, button: discord.ui.Button):
-        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
-        if bl:
-            await interaction.response.send_message("You are blacklisted from opening tickets.", ephemeral=True)
-            return
+        # Fetch config to build modal with custom labels — can't defer before send_modal
+        # This DB call is typically <100ms; blacklist check moved to modal on_submit
         cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         await interaction.response.send_modal(SupportTicketModal(interaction.guild_id, cfg))
 
@@ -216,9 +228,12 @@ class AutoMMView(discord.ui.View):
 
     @discord.ui.button(label="Request Auto-MM", style=discord.ButtonStyle.green, custom_id="panel_open_automm", emoji="🤖")
     async def open_automm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Defer FIRST — multiple DB calls follow; must beat the 3-second deadline
+        await interaction.response.defer(ephemeral=True)
+
         bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
         if bl:
-            await interaction.response.send_message("You are blacklisted from opening tickets.", ephemeral=True)
+            await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
             return
 
         from cogs.automm import _parse_dropdown_options
@@ -233,7 +248,7 @@ class AutoMMView(discord.ui.View):
             color=discord.Color.blurple()
         )
         view = PanelServiceSelectView(interaction.user, str(interaction.guild_id), options)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 class Panels(commands.Cog):
