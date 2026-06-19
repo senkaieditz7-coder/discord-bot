@@ -25,17 +25,19 @@ class TicketButtons(discord.ui.View):
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.green, custom_id="ticket_claim", emoji="✋")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Defer FIRST — must respond to Discord within 3 seconds or interaction expires
+        await interaction.response.defer(ephemeral=True)
         if not await is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can claim tickets.", ephemeral=True)
+            await interaction.followup.send("Only MM staff can claim tickets.", ephemeral=True)
             return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.response.send_message("Ticket not found.", ephemeral=True)
+            await interaction.followup.send("Ticket not found.", ephemeral=True)
             return
         if ticket["claimed_by"]:
             claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
             name = claimer.mention if claimer else f"<@{ticket['claimed_by']}>"
-            await interaction.response.send_message(f"Already claimed by {name}.", ephemeral=True)
+            await interaction.followup.send(f"Already claimed by {name}.", ephemeral=True)
             return
         await asyncio.to_thread(db.claim_ticket, str(interaction.channel_id), str(interaction.user.id))
         embed = discord.Embed(
@@ -43,21 +45,22 @@ class TicketButtons(discord.ui.View):
             description=f"{interaction.user.mention} has claimed this ticket.",
             color=discord.Color.green()
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @discord.ui.button(label="Add User", style=discord.ButtonStyle.blurple, custom_id="ticket_adduser", emoji="➕")
     async def add_user(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can add users.", ephemeral=True)
-            return
+        # Cannot defer before send_modal — permission check moved to AddUserModal.on_submit
         await interaction.response.send_modal(AddUserModal())
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.red, custom_id="ticket_close", emoji="🔒")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Defer FIRST — must respond to Discord within 3 seconds or interaction expires
+        await interaction.response.defer(ephemeral=True)
         if not await is_mm_or_admin(interaction.user):
-            await interaction.response.send_message("Only MM staff can close tickets.", ephemeral=True)
+            await interaction.followup.send("Only MM staff can close tickets.", ephemeral=True)
             return
-        await interaction.response.send_message("Closing ticket…")
+        await interaction.channel.send("🔒 Closing ticket…")
+        await interaction.delete_original_response()
         await close_ticket_channel(interaction.channel, interaction.guild, interaction.user)
 
 
@@ -65,19 +68,24 @@ class AddUserModal(discord.ui.Modal, title="Add User to Ticket"):
     user_id = discord.ui.TextInput(label="User ID or mention", placeholder="123456789012345678")
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Defer FIRST — must respond to Discord within 3 seconds or interaction expires
+        await interaction.response.defer(ephemeral=True)
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff can add users.", ephemeral=True)
+            return
         raw = self.user_id.value.strip().strip("<@!>")
         try:
             uid = int(raw)
         except ValueError:
-            await interaction.response.send_message("Invalid user ID.", ephemeral=True)
+            await interaction.followup.send("Invalid user ID.", ephemeral=True)
             return
         member = interaction.guild.get_member(uid)
         if not member:
-            await interaction.response.send_message("User not found in this server.", ephemeral=True)
+            await interaction.followup.send("User not found in this server.", ephemeral=True)
             return
         await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
         await asyncio.to_thread(db.add_ticket_user, str(interaction.channel_id), str(uid))
-        await interaction.response.send_message(f"Added {member.mention} to the ticket.")
+        await interaction.followup.send(f"Added {member.mention} to the ticket.")
 
 
 async def close_ticket_channel(channel: discord.TextChannel, guild: discord.Guild, closer: discord.Member):
