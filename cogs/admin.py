@@ -23,11 +23,7 @@ class Admin(commands.Cog):
             await interaction.followup.send("Only admins can blacklist users.", ephemeral=True)
             return
         await asyncio.to_thread(db.blacklist_user, str(user.id), str(interaction.guild_id), reason, str(interaction.user.id))
-        embed = discord.Embed(
-            title="User Blacklisted 🚫",
-            description=f"{user.mention} has been blacklisted.",
-            color=discord.Color.red()
-        )
+        embed = discord.Embed(title="User Blacklisted 🚫", description=f"{user.mention} has been blacklisted.", color=discord.Color.red())
         embed.add_field(name="Reason", value=reason)
         embed.set_footer(text=f"By {interaction.user}")
         await interaction.followup.send(embed=embed)
@@ -40,13 +36,11 @@ class Admin(commands.Cog):
             await interaction.followup.send("Only admins can unblacklist users.", ephemeral=True)
             return
         await asyncio.to_thread(db.unblacklist_user, str(user.id), str(interaction.guild_id))
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="User Unblacklisted ✅",
-                description=f"{user.mention} has been removed from the blacklist.",
-                color=discord.Color.green()
-            )
-        )
+        await interaction.followup.send(embed=discord.Embed(
+            title="User Unblacklisted ✅",
+            description=f"{user.mention} has been removed from the blacklist.",
+            color=discord.Color.green()
+        ))
 
     @app_commands.command(name="tradeinfo", description="Get details on a trade ticket by channel")
     @app_commands.describe(channel="The ticket channel (leave blank for current channel)")
@@ -61,24 +55,21 @@ class Admin(commands.Cog):
         if not ticket:
             await interaction.followup.send("No ticket found for that channel.", ephemeral=True)
             return
-
         opener = interaction.guild.get_member(int(ticket["opener_id"]))
         claimer_text = "Unclaimed"
         if ticket["claimed_by"]:
             claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
             claimer_text = claimer.mention if claimer else f"<@{ticket['claimed_by']}>"
-
         users = await asyncio.to_thread(db.get_ticket_users, str(ch.id))
         user_mentions = [f"<@{u}>" for u in users] or ["None"]
-
         embed = discord.Embed(title=f"Trade Info — #{ch.name}", color=discord.Color.blurple())
-        embed.add_field(name="ID", value=str(ticket["id"]), inline=True)
-        embed.add_field(name="Type", value=ticket["ticket_type"], inline=True)
-        embed.add_field(name="Status", value=ticket["status"], inline=True)
-        embed.add_field(name="Opened by", value=opener.mention if opener else f"<@{ticket['opener_id']}>", inline=True)
-        embed.add_field(name="Claimed by", value=claimer_text, inline=True)
-        embed.add_field(name="Opened at", value=ticket["created_at"][:19].replace("T", " "), inline=True)
-        embed.add_field(name="Users in ticket", value=", ".join(user_mentions), inline=False)
+        embed.add_field(name="ID",      value=str(ticket["id"]),                                                      inline=True)
+        embed.add_field(name="Type",    value=ticket["ticket_type"],                                                   inline=True)
+        embed.add_field(name="Status",  value=ticket["status"],                                                        inline=True)
+        embed.add_field(name="Opened by",  value=opener.mention if opener else f"<@{ticket['opener_id']}>",           inline=True)
+        embed.add_field(name="Claimed by", value=claimer_text,                                                         inline=True)
+        embed.add_field(name="Opened at",  value=ticket["created_at"][:19].replace("T", " "),                         inline=True)
+        embed.add_field(name="Users in ticket", value=", ".join(user_mentions),                                        inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="stats", description="View full bot statistics")
@@ -90,11 +81,11 @@ class Admin(commands.Cog):
             return
         s = await asyncio.to_thread(db.get_stats, str(interaction.guild_id))
         embed = discord.Embed(title="Bot Statistics 📊", color=discord.Color.blurple())
-        embed.add_field(name="Total Tickets", value=str(s["total_tickets"]), inline=True)
-        embed.add_field(name="Open Tickets", value=str(s["open_tickets"]), inline=True)
-        embed.add_field(name="Total Vouches", value=str(s["total_vouches"]), inline=True)
-        embed.add_field(name="Total Confirmations", value=str(s["total_confirms"]), inline=True)
-        embed.add_field(name="Total Deposits", value=str(s["total_deposits"]), inline=True)
+        embed.add_field(name="Total Tickets",        value=str(s["total_tickets"]),  inline=True)
+        embed.add_field(name="Open Tickets",         value=str(s["open_tickets"]),   inline=True)
+        embed.add_field(name="Total Vouches",        value=str(s["total_vouches"]),  inline=True)
+        embed.add_field(name="Total Confirmations",  value=str(s["total_confirms"]), inline=True)
+        embed.add_field(name="Total Deposits",       value=str(s["total_deposits"]), inline=True)
         embed.set_footer(text=f"Requested by {interaction.user}")
         await interaction.followup.send(embed=embed)
 
@@ -119,74 +110,47 @@ class Admin(commands.Cog):
         button_label="Link button label (also requires button_url)",
         button_url="Link button URL (must start with https://)"
     )
-    async def say(
-        self,
-        interaction: discord.Interaction,
-        message: str,
-        channel: discord.TextChannel = None,
-        embed_title: str = None,
-        embed_color: str = None,
-        image_url: str = None,
-        anonymous: bool = False,
-        button_label: str = None,
-        button_url: str = None,
-    ):
+    async def say(self, interaction: discord.Interaction, message: str, channel: discord.TextChannel = None,
+                  embed_title: str = None, embed_color: str = None, image_url: str = None,
+                  anonymous: bool = False, button_label: str = None, button_url: str = None):
         await interaction.response.defer(ephemeral=True)
         if not await self._is_admin(interaction.user):
             await interaction.followup.send("Only admins can use this command.", ephemeral=True)
             return
-
         target = channel or interaction.channel
-
         view = None
         if button_label and button_url and button_url.startswith("http"):
             view = discord.ui.View()
-            view.add_item(discord.ui.Button(
-                style=discord.ButtonStyle.link,
-                label=button_label,
-                url=button_url
-            ))
-
+            view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label=button_label, url=button_url))
         if embed_title:
             try:
                 color_val = int((embed_color or "5865F2").lstrip("#"), 16)
             except ValueError:
                 color_val = 0x5865F2
-
-            embed = discord.Embed(
-                title=embed_title,
-                description=message,
-                color=color_val
-            )
+            embed = discord.Embed(title=embed_title, description=message, color=color_val)
             if image_url:
                 embed.set_image(url=image_url)
             if not anonymous:
                 embed.set_footer(text=f"Sent by {interaction.user}")
-
             await target.send(embed=embed, view=view)
         else:
             await target.send(message, view=view)
-
-        await interaction.followup.send(
-            f"✅ Message sent to {target.mention}.", ephemeral=True
-        )
+        await interaction.followup.send(f"✅ Message sent to {target.mention}.", ephemeral=True)
 
     @app_commands.command(name="aboutus", description="Display the About Us embed")
     async def aboutus(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff or higher can use this command.", ephemeral=True)
+            return
         cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
         message = cfg.get("aboutus_message", "We are a trusted middleman service for safe trades.")
-        image = cfg.get("aboutus_image", "")
-
-        embed = discord.Embed(
-            title=f"About {interaction.guild.name}",
-            description=message,
-            color=discord.Color.blurple()
-        )
+        image   = cfg.get("aboutus_image", "")
+        embed = discord.Embed(title=f"About {interaction.guild.name}", description=message, color=discord.Color.blurple())
         embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
         if image:
             embed.set_image(url=image)
-
         await interaction.followup.send(embed=embed)
 
     # ── Prefix Commands ───────────────────────────────────────────────────────
@@ -236,13 +200,13 @@ class Admin(commands.Cog):
         users = await asyncio.to_thread(db.get_ticket_users, str(ch.id))
         user_mentions = [f"<@{u}>" for u in users] or ["None"]
         embed = discord.Embed(title=f"Trade Info — #{ch.name}", color=discord.Color.blurple())
-        embed.add_field(name="ID", value=str(ticket["id"]), inline=True)
-        embed.add_field(name="Type", value=ticket["ticket_type"], inline=True)
-        embed.add_field(name="Status", value=ticket["status"], inline=True)
-        embed.add_field(name="Opened by", value=opener.mention if opener else f"<@{ticket['opener_id']}>", inline=True)
-        embed.add_field(name="Claimed by", value=claimer_text, inline=True)
-        embed.add_field(name="Opened at", value=ticket["created_at"][:19].replace("T", " "), inline=True)
-        embed.add_field(name="Users in ticket", value=", ".join(user_mentions), inline=False)
+        embed.add_field(name="ID",      value=str(ticket["id"]),                                            inline=True)
+        embed.add_field(name="Type",    value=ticket["ticket_type"],                                         inline=True)
+        embed.add_field(name="Status",  value=ticket["status"],                                              inline=True)
+        embed.add_field(name="Opened by",  value=opener.mention if opener else f"<@{ticket['opener_id']}>", inline=True)
+        embed.add_field(name="Claimed by", value=claimer_text,                                               inline=True)
+        embed.add_field(name="Opened at",  value=ticket["created_at"][:19].replace("T", " "),               inline=True)
+        embed.add_field(name="Users in ticket", value=", ".join(user_mentions),                              inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(name="stats")
@@ -254,11 +218,11 @@ class Admin(commands.Cog):
             return
         s = await asyncio.to_thread(db.get_stats, str(ctx.guild.id))
         embed = discord.Embed(title="Bot Statistics 📊", color=discord.Color.blurple())
-        embed.add_field(name="Total Tickets", value=str(s["total_tickets"]), inline=True)
-        embed.add_field(name="Open Tickets", value=str(s["open_tickets"]), inline=True)
-        embed.add_field(name="Total Vouches", value=str(s["total_vouches"]), inline=True)
+        embed.add_field(name="Total Tickets",       value=str(s["total_tickets"]),  inline=True)
+        embed.add_field(name="Open Tickets",        value=str(s["open_tickets"]),   inline=True)
+        embed.add_field(name="Total Vouches",       value=str(s["total_vouches"]),  inline=True)
         embed.add_field(name="Total Confirmations", value=str(s["total_confirms"]), inline=True)
-        embed.add_field(name="Total Deposits", value=str(s["total_deposits"]), inline=True)
+        embed.add_field(name="Total Deposits",      value=str(s["total_deposits"]), inline=True)
         embed.set_footer(text=f"Requested by {ctx.author}")
         await ctx.send(embed=embed)
 
@@ -280,10 +244,14 @@ class Admin(commands.Cog):
 
     @commands.command(name="aboutus")
     async def aboutus_prefix(self, ctx: commands.Context):
-        """Display the About Us embed."""
+        """Display the About Us embed. (MM or higher only)"""
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff or higher can use this command.", delete_after=10)
+            return
         cfg = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
         message = cfg.get("aboutus_message", "We are a trusted middleman service for safe trades.")
-        image = cfg.get("aboutus_image", "")
+        image   = cfg.get("aboutus_image", "")
         embed = discord.Embed(title=f"About {ctx.guild.name}", description=message, color=discord.Color.blurple())
         embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
         if image:
