@@ -54,12 +54,11 @@ class Fees(commands.Cog):
     @app_commands.command(name="fees", description="Post the middleman service fee embed with split options")
     async def fees(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        from cogs.tickets import is_mm_or_admin
+        from cogs.tickets import is_mm_or_admin, get_cached_config
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only MM staff or higher can post the fee embed.", ephemeral=True)
             return
-
-        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        cfg    = await get_cached_config(str(interaction.guild_id))
         title  = cfg.get("fees_title") or "Middleman Service Fee"
         desc   = cfg.get("fees_desc")  or (
             "Your items are currently being held by the middleman.\n\n"
@@ -69,22 +68,18 @@ class Fees(commands.Cog):
         )
         footer = cfg.get("fees_footer", "")
         image  = cfg.get("fees_image",  "")
-
-        embed = discord.Embed(title=title, description=desc, color=discord.Color.green())
+        embed  = discord.Embed(title=title, description=desc, color=discord.Color.green())
         if footer: embed.set_footer(text=footer)
         if image:  embed.set_image(url=image)
-
         await interaction.followup.send(embed=embed, view=FeeSplitView(str(interaction.guild_id)))
 
     @commands.command(name="fees")
     async def fees_prefix(self, ctx: commands.Context):
-        """Post the middleman service fee embed. (MM or higher only)"""
-        from cogs.tickets import is_mm_or_admin
+        from cogs.tickets import is_mm_or_admin, get_cached_config
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff or higher can post the fee embed.", delete_after=10)
             return
-
-        cfg = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
+        cfg    = await get_cached_config(str(ctx.guild.id))
         title  = cfg.get("fees_title") or "Middleman Service Fee"
         desc   = cfg.get("fees_desc")  or (
             "Your items are currently being held by the middleman.\n\n"
@@ -94,11 +89,9 @@ class Fees(commands.Cog):
         )
         footer = cfg.get("fees_footer", "")
         image  = cfg.get("fees_image",  "")
-
-        embed = discord.Embed(title=title, description=desc, color=discord.Color.green())
+        embed  = discord.Embed(title=title, description=desc, color=discord.Color.green())
         if footer: embed.set_footer(text=footer)
         if image:  embed.set_image(url=image)
-
         await ctx.send(embed=embed, view=FeeSplitView(str(ctx.guild.id)))
 
 
