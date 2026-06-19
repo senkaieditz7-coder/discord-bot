@@ -25,7 +25,6 @@ class TicketButtons(discord.ui.View):
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.green, custom_id="ticket_claim", emoji="✋")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Defer FIRST — must respond to Discord within 3 seconds or interaction expires
         await interaction.response.defer(ephemeral=True)
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only MM staff can claim tickets.", ephemeral=True)
@@ -49,12 +48,10 @@ class TicketButtons(discord.ui.View):
 
     @discord.ui.button(label="Add User", style=discord.ButtonStyle.blurple, custom_id="ticket_adduser", emoji="➕")
     async def add_user(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Cannot defer before send_modal — permission check moved to AddUserModal.on_submit
         await interaction.response.send_modal(AddUserModal())
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.red, custom_id="ticket_close", emoji="🔒")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Defer FIRST — must respond to Discord within 3 seconds or interaction expires
         await interaction.response.defer(ephemeral=True)
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only MM staff can close tickets.", ephemeral=True)
@@ -68,7 +65,6 @@ class AddUserModal(discord.ui.Modal, title="Add User to Ticket"):
     user_id = discord.ui.TextInput(label="User ID or mention", placeholder="123456789012345678")
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Defer FIRST — must respond to Discord within 3 seconds or interaction expires
         await interaction.response.defer(ephemeral=True)
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only MM staff can add users.", ephemeral=True)
@@ -144,9 +140,9 @@ class Tickets(commands.Cog):
         if bl:
             return None, "blacklisted"
 
-        category_key = "ticket_category" if ticket_type == "trade" else "support_category"
-        if ticket_type == "automm":
-            category_key = "automm_category"
+        category_key = "ticket_category" if ticket_type == "trade" else (
+            "automm_category" if ticket_type == "automm" else "support_category"
+        )
         cat_id   = await asyncio.to_thread(db.get_config, str(guild.id), category_key)
         category = guild.get_channel(int(cat_id)) if cat_id and cat_id.isdigit() else None
 
@@ -173,21 +169,12 @@ class Tickets(commands.Cog):
 
         await asyncio.to_thread(db.create_ticket, str(channel.id), str(guild.id), str(opener.id), ticket_type)
 
+        # For trade/support — the calling modal sends the details embed + TicketButtons.
+        # For automm — the AutoMM cog handles the welcome message.
         if ticket_type == "automm":
             automm_cog = self.bot.get_cog("AutoMM")
             if automm_cog:
                 await automm_cog._start_session(channel, guild, opener)
-        else:
-            cfg    = await asyncio.to_thread(db.get_all_config, str(guild.id))
-            title  = cfg.get("ticket_panel_title",  "Trade Ticket")                            if ticket_type == "trade" else cfg.get("support_panel_title",  "Support Ticket")
-            desc   = cfg.get("ticket_panel_desc",   "A staff member will be with you shortly.") if ticket_type == "trade" else cfg.get("support_panel_desc",  "Please describe your issue.")
-            footer = cfg.get("ticket_panel_footer", "")                                        if ticket_type == "trade" else cfg.get("support_panel_footer", "")
-            image  = cfg.get("ticket_panel_image",  "")                                        if ticket_type == "trade" else cfg.get("support_panel_image",  "")
-
-            embed = discord.Embed(title=title, description=f"{opener.mention}\n\n{desc}", color=discord.Color.blurple())
-            if footer: embed.set_footer(text=footer)
-            if image:  embed.set_image(url=image)
-            await channel.send(embed=embed, view=TicketButtons())
 
         log_channel_id = await asyncio.to_thread(db.get_config, str(guild.id), "log_channel")
         if log_channel_id:
@@ -217,12 +204,11 @@ class Tickets(commands.Cog):
             await interaction.followup.send(f"Already claimed by {name}.", ephemeral=True)
             return
         await asyncio.to_thread(db.claim_ticket, str(interaction.channel_id), str(interaction.user.id))
-        embed = discord.Embed(
+        await interaction.followup.send(embed=discord.Embed(
             title="Ticket Claimed",
             description=f"{interaction.user.mention} has claimed this ticket.",
             color=discord.Color.green()
-        )
-        await interaction.followup.send(embed=embed)
+        ))
 
     @app_commands.command(name="close", description="Close and delete this ticket channel")
     async def close(self, interaction: discord.Interaction):
@@ -280,18 +266,16 @@ class Tickets(commands.Cog):
             return
         await asyncio.to_thread(db.transfer_ticket, str(interaction.channel_id), str(mm.id))
         await interaction.channel.set_permissions(mm, read_messages=True, send_messages=True)
-        embed = discord.Embed(
+        await interaction.followup.send(embed=discord.Embed(
             title="Ticket Transferred",
             description=f"This ticket has been transferred to {mm.mention} by {interaction.user.mention}.",
             color=discord.Color.orange()
-        )
-        await interaction.followup.send(embed=embed)
+        ))
 
     # ── Prefix Commands ───────────────────────────────────────────────────────
 
     @commands.command(name="claim")
     async def claim_prefix(self, ctx: commands.Context):
-        """Claim this ticket as MM staff."""
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff can claim tickets.", delete_after=10)
             return
@@ -313,7 +297,6 @@ class Tickets(commands.Cog):
 
     @commands.command(name="close")
     async def close_prefix(self, ctx: commands.Context):
-        """Close and delete this ticket channel."""
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff can close tickets.", delete_after=10)
             return
@@ -326,7 +309,6 @@ class Tickets(commands.Cog):
 
     @commands.command(name="adduser")
     async def adduser_prefix(self, ctx: commands.Context, user: discord.Member):
-        """Add a user to this ticket."""
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff can add users.", delete_after=10)
             return
@@ -340,7 +322,6 @@ class Tickets(commands.Cog):
 
     @commands.command(name="removeuser")
     async def removeuser_prefix(self, ctx: commands.Context, user: discord.Member):
-        """Remove a user from this ticket."""
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff can remove users.", delete_after=10)
             return
@@ -354,7 +335,6 @@ class Tickets(commands.Cog):
 
     @commands.command(name="transfer")
     async def transfer_prefix(self, ctx: commands.Context, mm: discord.Member):
-        """Transfer this ticket to another middleman."""
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff can transfer tickets.", delete_after=10)
             return
