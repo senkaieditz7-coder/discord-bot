@@ -17,9 +17,7 @@ class FeeSplitView(discord.ui.View):
 
     async def _guard(self, interaction: discord.Interaction) -> bool:
         if self._done:
-            await interaction.response.send_message(
-                "A fee option has already been selected.", ephemeral=True
-            )
+            await interaction.response.send_message("A fee option has already been selected.", ephemeral=True)
             return False
         self._done = True
         return True
@@ -30,15 +28,11 @@ class FeeSplitView(discord.ui.View):
             return
         self._disable_all()
         await interaction.message.edit(view=self)
-        embed = discord.Embed(
+        await interaction.response.send_message(embed=discord.Embed(
             title="⚖️ Split Fee Selected",
-            description=(
-                "Both traders will each cover **half** of the middleman fee.\n"
-                "The MM will confirm the exact amount in chat."
-            ),
+            description="Both traders will each cover **half** of the middleman fee.\nThe MM will confirm the exact amount in chat.",
             color=discord.Color.blurple()
-        )
-        await interaction.response.send_message(embed=embed)
+        ))
 
     @discord.ui.button(label="💯 Full Fee (One Side)", style=discord.ButtonStyle.red)
     async def full_fee(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -46,15 +40,11 @@ class FeeSplitView(discord.ui.View):
             return
         self._disable_all()
         await interaction.message.edit(view=self)
-        embed = discord.Embed(
+        await interaction.response.send_message(embed=discord.Embed(
             title="💯 Full Fee — One Side Selected",
-            description=(
-                "One trader will cover the **entire** middleman fee.\n"
-                "The MM will confirm the exact amount in chat."
-            ),
+            description="One trader will cover the **entire** middleman fee.\nThe MM will confirm the exact amount in chat.",
             color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed)
+        ))
 
 
 class Fees(commands.Cog):
@@ -64,10 +54,14 @@ class Fees(commands.Cog):
     @app_commands.command(name="fees", description="Post the middleman service fee embed with split options")
     async def fees(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff or higher can post the fee embed.", ephemeral=True)
+            return
 
-        title = cfg.get("fees_title") or "Middleman Service Fee"
-        desc = cfg.get("fees_desc") or (
+        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        title  = cfg.get("fees_title") or "Middleman Service Fee"
+        desc   = cfg.get("fees_desc")  or (
             "Your items are currently being held by the middleman.\n\n"
             "The MM will list the service fee price in chat. "
             "Please discuss with the other trader whether to split the fee or have one side cover it fully.\n\n"
@@ -77,23 +71,22 @@ class Fees(commands.Cog):
         image  = cfg.get("fees_image",  "")
 
         embed = discord.Embed(title=title, description=desc, color=discord.Color.green())
-        if footer:
-            embed.set_footer(text=footer)
-        if image:
-            embed.set_image(url=image)
+        if footer: embed.set_footer(text=footer)
+        if image:  embed.set_image(url=image)
 
-        view = FeeSplitView(str(interaction.guild_id))
-        await interaction.followup.send(embed=embed, view=view)
-
-    # ── Prefix Command ────────────────────────────────────────────────────────
+        await interaction.followup.send(embed=embed, view=FeeSplitView(str(interaction.guild_id)))
 
     @commands.command(name="fees")
     async def fees_prefix(self, ctx: commands.Context):
-        """Post the middleman service fee embed with split options."""
-        cfg = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
+        """Post the middleman service fee embed. (MM or higher only)"""
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff or higher can post the fee embed.", delete_after=10)
+            return
 
-        title = cfg.get("fees_title") or "Middleman Service Fee"
-        desc = cfg.get("fees_desc") or (
+        cfg = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
+        title  = cfg.get("fees_title") or "Middleman Service Fee"
+        desc   = cfg.get("fees_desc")  or (
             "Your items are currently being held by the middleman.\n\n"
             "The MM will list the service fee price in chat. "
             "Please discuss with the other trader whether to split the fee or have one side cover it fully.\n\n"
@@ -103,13 +96,10 @@ class Fees(commands.Cog):
         image  = cfg.get("fees_image",  "")
 
         embed = discord.Embed(title=title, description=desc, color=discord.Color.green())
-        if footer:
-            embed.set_footer(text=footer)
-        if image:
-            embed.set_image(url=image)
+        if footer: embed.set_footer(text=footer)
+        if image:  embed.set_image(url=image)
 
-        view = FeeSplitView(str(ctx.guild.id))
-        await ctx.send(embed=embed, view=view)
+        await ctx.send(embed=embed, view=FeeSplitView(str(ctx.guild.id)))
 
 
 async def setup(bot):
