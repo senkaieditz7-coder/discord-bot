@@ -27,7 +27,6 @@ def get_support_channel_mention(guild, guild_id):
 
 
 def _parse_dropdown_options(guild_id):
-    """Return list of option strings from config, with sane defaults."""
     raw = db.get_config(str(guild_id), "automm_dropdown_options") or ""
     if "\n" in raw:
         opts = [o.strip() for o in raw.splitlines() if o.strip()]
@@ -64,6 +63,9 @@ class AutoMMDropdownView(discord.ui.View):
             )
             return
 
+        # Defer immediately before any DB calls
+        await interaction.response.defer()
+
         selected = interaction.data["values"][0]
         self.stop()
 
@@ -74,7 +76,7 @@ class AutoMMDropdownView(discord.ui.View):
             color=discord.Color.green()
         )
         embed.set_footer(text=f"Auto Middleman — {bank}")
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
         mm_role_id = await asyncio.to_thread(db.get_config, str(interaction.guild_id), "mm_role")
         ping = f"<@&{mm_role_id}>" if mm_role_id else "@MM Staff"
@@ -137,9 +139,10 @@ class RoleSelectView(discord.ui.View):
         )
 
     async def _try_advance(self, interaction: discord.Interaction) -> bool:
+        """Called after interaction is already deferred. Returns True if advanced."""
         uid = str(interaction.user.id)
         if uid not in [str(self.user1.id), str(self.user2.id)]:
-            await interaction.response.send_message("You are not part of this trade.", ephemeral=True)
+            await interaction.followup.send("You are not part of this trade.", ephemeral=True)
             return False
 
         if len(self._selections) == 2:
@@ -157,6 +160,7 @@ class RoleSelectView(discord.ui.View):
         return False
 
     async def _show_method_select(self, interaction: discord.Interaction):
+        """Interaction is already deferred — uses edit_original_response."""
         session  = await asyncio.to_thread(db.get_automm_session, self.channel_id)
         sender   = interaction.guild.get_member(int(session["sender_id"]))
         receiver = interaction.guild.get_member(int(session["receiver_id"]))
@@ -172,7 +176,7 @@ class RoleSelectView(discord.ui.View):
             color=discord.Color.gold()
         )
         view = MethodSelectView(self.channel_id, sender, receiver)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
     @discord.ui.button(label="I am Money Sender", style=discord.ButtonStyle.green, emoji="💸", row=0)
     async def be_sender(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -186,12 +190,15 @@ class RoleSelectView(discord.ui.View):
                 "The other trader already chose Sender. Please choose Receiver.", ephemeral=True
             )
             return
+
+        # Defer before DB calls
+        await interaction.response.defer()
         self._selections[uid] = "sender"
         if await self._try_advance(interaction):
             return
         bank_name = await asyncio.to_thread(get_bank_name, interaction.guild_id)
         embed = self._make_status_embed(bank_name)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(label="I am Money Receiver", style=discord.ButtonStyle.blurple, emoji="📥", row=0)
     async def be_receiver(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -205,12 +212,15 @@ class RoleSelectView(discord.ui.View):
                 "The other trader already chose Receiver. Please choose Sender.", ephemeral=True
             )
             return
+
+        # Defer before DB calls
+        await interaction.response.defer()
         self._selections[uid] = "receiver"
         if await self._try_advance(interaction):
             return
         bank_name = await asyncio.to_thread(get_bank_name, interaction.guild_id)
         embed = self._make_status_embed(bank_name)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(label="Reset", style=discord.ButtonStyle.red, emoji="🔄", row=1)
     async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -218,11 +228,14 @@ class RoleSelectView(discord.ui.View):
         if uid not in [str(self.user1.id), str(self.user2.id)]:
             await interaction.response.send_message("You are not part of this trade.", ephemeral=True)
             return
+
+        # Defer before DB calls
+        await interaction.response.defer()
         self._selections.clear()
         await asyncio.to_thread(db.update_automm_session, self.channel_id, sender_id=None, receiver_id=None)
         bank_name = await asyncio.to_thread(get_bank_name, interaction.guild_id)
         embed = self._make_status_embed(bank_name)
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
 
 # ── Payment Method Select View ────────────────────────────────────────────────
@@ -256,6 +269,9 @@ class MethodSelectView(discord.ui.View):
             await interaction.response.send_message("You are not part of this trade.", ephemeral=True)
             return
 
+        # Defer before DB calls
+        await interaction.response.defer()
+
         method = interaction.data["values"][0]
         await asyncio.to_thread(db.update_automm_session, self.channel_id, payment_method=method, state="waiting_done")
         self.stop()
@@ -274,7 +290,7 @@ class MethodSelectView(discord.ui.View):
             color=discord.Color.green()
         )
         embed.set_footer(text=f"Auto Middleman — {bank}")
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
 
 # ── DM Confirmation View ──────────────────────────────────────────────────────
@@ -288,9 +304,12 @@ class DMConfirmView(discord.ui.View):
 
     @discord.ui.button(label="✅ Confirm — Money Sent", style=discord.ButtonStyle.green)
     async def confirm_sent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Defer immediately — DB calls + channel.send would exceed 3s timeout
+        await interaction.response.defer()
+
         session = await asyncio.to_thread(db.get_automm_session, self.channel_id)
         if not session or session["state"] != "waiting_automm":
-            await interaction.response.send_message("This session is no longer active.", ephemeral=True)
+            await interaction.followup.send("This session is no longer active.", ephemeral=True)
             self.stop()
             return
 
@@ -318,7 +337,7 @@ class DMConfirmView(discord.ui.View):
         except Exception:
             pass
 
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content="✅ Confirmed! The ticket has been updated.",
             view=None
         )
