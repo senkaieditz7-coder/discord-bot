@@ -5,27 +5,18 @@ import db
 import asyncio
 
 
-def _parse_link_buttons(raw: str) -> list:
-    buttons = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line or "|" not in line:
-            continue
-        parts = line.split("|", 1)
-        label = parts[0].strip()[:80]
-        url   = parts[1].strip()
-        if label and url.startswith("http"):
-            buttons.append((label, url))
-    return buttons[:4]
-
-
-async def _add_link_buttons(view: discord.ui.View, guild_id, btn_key):
+async def _add_link_buttons(view: discord.ui.View, guild_id, cfg_key_prefix: str):
+    """Add optional link buttons from config (up to 3)."""
     from cogs.tickets import get_cached_config
     cfg = await get_cached_config(str(guild_id))
-    for label, url in _parse_link_buttons(cfg.get(btn_key, "")):
-        view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label=label, url=url, row=1))
-    return view
+    for i in range(1, 4):
+        label = cfg.get(f"{cfg_key_prefix}_{i}_label", "")
+        url   = cfg.get(f"{cfg_key_prefix}_{i}_url",   "")
+        if label and url and url.startswith("http"):
+            view.add_item(discord.ui.Button(label=label, url=url, style=discord.ButtonStyle.link))
 
+
+# ── Trade Ticket Modal ────────────────────────────────────────────────────────
 
 class TradeTicketModal(discord.ui.Modal):
     def __init__(self, guild_id, cfg):
@@ -33,13 +24,13 @@ class TradeTicketModal(discord.ui.Modal):
         super().__init__(title=modal_title)
         self.guild_id = guild_id
 
-        q1 = (cfg.get("ticket_q1") or "What is the trade?")[:45]
-        q2 = (cfg.get("ticket_q2") or "Other user (ID, @mention, or username)")[:45]
-        q3 = (cfg.get("ticket_q3") or "Can you join private servers using links?")[:45]
+        q1 = (cfg.get("trade_q1") or "What are you trading?")[:45]
+        q2 = (cfg.get("trade_q2") or "Trade value (USD estimate)?")[:45]
+        q3 = (cfg.get("trade_q3") or "Any additional info?")[:45]
 
-        self.ans1 = discord.ui.TextInput(label=q1, style=discord.TextStyle.paragraph, max_length=500)
-        self.ans2 = discord.ui.TextInput(label=q2, max_length=200)
-        self.ans3 = discord.ui.TextInput(label=q3, max_length=100)
+        self.ans1 = discord.ui.TextInput(label=q1, style=discord.TextStyle.paragraph, max_length=400)
+        self.ans2 = discord.ui.TextInput(label=q2, max_length=100)
+        self.ans3 = discord.ui.TextInput(label=q3, style=discord.TextStyle.paragraph, required=False, max_length=400)
         self.add_item(self.ans1)
         self.add_item(self.ans2)
         self.add_item(self.ans3)
@@ -64,9 +55,9 @@ class TradeTicketModal(discord.ui.Modal):
 
         from cogs.tickets import get_cached_config, TicketButtons
         cfg = await get_cached_config(str(interaction.guild_id))
-        q1  = cfg.get("ticket_q1") or "What is the trade?"
-        q2  = cfg.get("ticket_q2") or "Other user (ID, @mention, or username)"
-        q3  = cfg.get("ticket_q3") or "Can you join private servers using links?"
+        q1  = cfg.get("trade_q1") or "What are you trading?"
+        q2  = cfg.get("trade_q2") or "Trade value (USD estimate)?"
+        q3  = cfg.get("trade_q3") or "Any additional info?"
 
         embed = discord.Embed(title="📋 Trade Details", color=discord.Color.green())
         embed.add_field(name="Opened by", value=interaction.user.mention, inline=True)
@@ -74,11 +65,14 @@ class TradeTicketModal(discord.ui.Modal):
         embed.add_field(name="\u200b",    value="\u200b",                  inline=True)
         embed.add_field(name=q1, value=self.ans1.value, inline=False)
         embed.add_field(name=q2, value=self.ans2.value, inline=False)
-        embed.add_field(name=q3, value=self.ans3.value, inline=False)
+        if self.ans3.value:
+            embed.add_field(name=q3, value=self.ans3.value, inline=False)
         embed.set_footer(text=f"Submitted by {interaction.user}")
         await channel.send(embed=embed, view=TicketButtons())
         await interaction.followup.send(f"✅ Your ticket has been created: {channel.mention}", ephemeral=True)
 
+
+# ── Support Ticket Modal ──────────────────────────────────────────────────────
 
 class SupportTicketModal(discord.ui.Modal):
     def __init__(self, guild_id, cfg):
@@ -128,37 +122,78 @@ class SupportTicketModal(discord.ui.Modal):
         await interaction.followup.send(f"✅ Your support ticket has been created: {channel.mention}", ephemeral=True)
 
 
-class PanelServiceSelectView(discord.ui.View):
-    def __init__(self, opener: discord.Member, guild_id: str, options: list):
-        super().__init__(timeout=120)
-        self.opener   = opener
-        self.guild_id = guild_id
-        select_options = [discord.SelectOption(label=opt[:100], value=opt[:100]) for opt in options]
-        select = discord.ui.Select(placeholder="Choose a service…", options=select_options)
-        select.callback = self._on_select
-        self.add_item(select)
+# ── Auto MM Panel View (select directly in panel, no button required) ─────────
+
+class AutoMMPanelView(discord.ui.View):
+    """
+    Persistent view with a service select menu embedded directly in the panel message.
+    User picks a service → ticket creates immediately (no second step).
+    Options are baked in at panel-post time via /autommpanel.
+    For bot-restart persistence, we attach with a placeholder option — Discord
+    stores the real options in the message so the callback still receives the
+    correct value from interaction.data["values"].
+    """
+    def __init__(self, options: list = None, placeholder: str = "Select a service to open your ticket…"):
+        super().__init__(timeout=None)
+        select_options = [
+            discord.SelectOption(label=opt[:100], value=opt[:100])
+            for opt in (options or ["placeholder"])
+        ]
+        self._select = discord.ui.Select(
+            placeholder=placeholder[:150],
+            options=select_options,
+            custom_id="automm_panel_select"
+        )
+        self._select.callback = self._on_select
+        self.add_item(self._select)
 
     async def _on_select(self, interaction: discord.Interaction):
-        if interaction.user.id != self.opener.id:
-            await interaction.response.send_message("Only you can select a service for your own ticket.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
+        if bl:
+            await interaction.followup.send(
+                embed=discord.Embed(description="🚫 You are blacklisted from opening tickets.", color=discord.Color.red()),
+                ephemeral=True
+            )
             return
-        selected   = interaction.data["values"][0]
-        automm_cog = interaction.client.get_cog("AutoMM")
+
+        selected    = interaction.data["values"][0]
+        automm_cog  = interaction.client.get_cog("AutoMM")
+        tickets_cog = interaction.client.get_cog("Tickets")
+
         if automm_cog:
             automm_cog._preselected_service[str(interaction.user.id)] = selected
-        tickets_cog = interaction.client.get_cog("Tickets")
+
         if not tickets_cog:
-            await interaction.response.edit_message(content="Ticket system unavailable.", embed=None, view=None)
+            await interaction.followup.send(
+                embed=discord.Embed(description="❌ Ticket system unavailable.", color=discord.Color.red()),
+                ephemeral=True
+            )
             return
-        await interaction.response.edit_message(content="⏳ Creating your ticket…", embed=None, view=None)
+
         channel, err = await tickets_cog.open_ticket(interaction.guild, interaction.user, "automm")
         if err == "blacklisted":
-            await interaction.edit_original_response(content="You are blacklisted from opening tickets.")
+            await interaction.followup.send(
+                embed=discord.Embed(description="🚫 You are blacklisted from opening tickets.", color=discord.Color.red()),
+                ephemeral=True
+            )
         elif channel:
-            await interaction.edit_original_response(content=f"✅ Your Auto MM ticket has been created: {channel.mention}")
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="✅ Ticket Created",
+                    description=f"Your **{selected}** ticket has been created: {channel.mention}",
+                    color=discord.Color.green()
+                ),
+                ephemeral=True
+            )
         else:
-            await interaction.edit_original_response(content="Failed to create ticket.")
+            await interaction.followup.send(
+                embed=discord.Embed(description="❌ Failed to create ticket. Please try again.", color=discord.Color.red()),
+                ephemeral=True
+            )
 
+
+# ── Trade / Support panel views (persistent buttons) ─────────────────────────
 
 class OpenTradeTicketView(discord.ui.View):
     def __init__(self):
@@ -182,36 +217,16 @@ class OpenSupportTicketView(discord.ui.View):
         await interaction.response.send_modal(SupportTicketModal(interaction.guild_id, cfg))
 
 
-class AutoMMView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Request Auto-MM", style=discord.ButtonStyle.green, custom_id="panel_open_automm", emoji="🤖")
-    async def open_automm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
-        if bl:
-            await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
-            return
-        from cogs.automm import _parse_dropdown_options
-        from cogs.tickets import get_cached_config
-        cfg            = await get_cached_config(str(interaction.guild_id))
-        dropdown_label = cfg.get("automm_dropdown_label") or "What service do you need?"
-        options        = await asyncio.to_thread(_parse_dropdown_options, str(interaction.guild_id))
-        embed = discord.Embed(
-            title="🤖 Auto Middleman",
-            description=f"**{dropdown_label}**\nSelect a service below to open your ticket.",
-            color=discord.Color.blurple()
-        )
-        await interaction.followup.send(embed=embed, view=PanelServiceSelectView(interaction.user, str(interaction.guild_id), options), ephemeral=True)
-
+# ── Panels Cog ────────────────────────────────────────────────────────────────
 
 class Panels(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.bot.add_view(OpenTradeTicketView())
         self.bot.add_view(OpenSupportTicketView())
-        self.bot.add_view(AutoMMView())
+        # Persistent re-attach for AutoMM panel (placeholder options; real
+        # options are stored in the Discord message component data)
+        self.bot.add_view(AutoMMPanelView())
 
     async def _make_embed(self, guild_id, cfg_prefix, default_title, default_desc):
         from cogs.tickets import get_cached_config
@@ -251,18 +266,31 @@ class Panels(commands.Cog):
         await interaction.channel.send(embed=embed, view=view)
         await interaction.followup.send("✅ Support ticket panel posted.", ephemeral=True)
 
-    @app_commands.command(name="autommpanel", description="Post the Auto MM panel")
+    @app_commands.command(name="autommpanel", description="Post the Auto MM panel with service select")
     async def autommPanel(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         from cogs.tickets import is_mm_or_admin
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only staff can post panels.", ephemeral=True)
             return
-        embed = await self._make_embed(interaction.guild_id, "automm_panel", "🤖 Auto Middleman", "Click below to request an automatic middleman.")
-        view  = AutoMMView()
+        from cogs.automm import _parse_dropdown_options
+        from cogs.tickets import get_cached_config
+        cfg         = await get_cached_config(str(interaction.guild_id))
+        options     = await asyncio.to_thread(_parse_dropdown_options, str(interaction.guild_id))
+        placeholder = cfg.get("automm_dropdown_label") or "Select a service to open your ticket…"
+        embed       = await self._make_embed(
+            interaction.guild_id, "automm_panel",
+            "🤖 Auto Middleman",
+            "Select your service from the dropdown below — your ticket will be created instantly."
+        )
+        view = AutoMMPanelView(options=options, placeholder=placeholder)
         await _add_link_buttons(view, interaction.guild_id, "automm_panel_button")
         await interaction.channel.send(embed=embed, view=view)
-        await interaction.followup.send("✅ Auto MM panel posted.", ephemeral=True)
+        await interaction.followup.send(
+            "✅ Auto MM panel posted.\n\n"
+            "⚠️ If you change service options via `$botedit`, re-run `/autommpanel` to update the dropdown.",
+            ephemeral=True
+        )
 
 
 async def setup(bot):
