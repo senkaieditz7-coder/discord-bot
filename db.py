@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 import psycopg2
 import psycopg2.extras
@@ -10,9 +11,6 @@ DB_URL = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
 
 _pool = None
 
-# Extra connection kwargs: fail fast if DB unreachable (10s),
-# send TCP keepalives so dead Supabase connections are detected within ~55s
-# instead of hanging until OS TCP timeout.
 _CONN_KWARGS = {
     "connect_timeout": 10,
     "keepalives": 1,
@@ -20,6 +18,28 @@ _CONN_KWARGS = {
     "keepalives_interval": 5,
     "keepalives_count": 5,
 }
+
+# ── In-memory config cache (60s TTL) ─────────────────────────────────────────
+_config_cache: dict = {}
+_CONFIG_TTL = 60  # seconds
+
+
+def _cache_get(key):
+    entry = _config_cache.get(key)
+    if entry and time.monotonic() < entry[1]:
+        return entry[0], True
+    return None, False
+
+
+def _cache_set(key, value):
+    _config_cache[key] = (value, time.monotonic() + _CONFIG_TTL)
+
+
+def _cache_invalidate_guild(guild_id: str):
+    prefix = f"{guild_id}:"
+    stale = [k for k in list(_config_cache) if k == f"__all__{guild_id}" or k.startswith(prefix)]
+    for k in stale:
+        _config_cache.pop(k, None)
 
 
 def _get_pool():
@@ -30,29 +50,26 @@ def _get_pool():
 
 
 def _get_conn():
-    """Return a live connection from the pool.
-    Validates the connection with a quick SELECT 1; if dead, rebuilds the pool."""
+    """Return a live connection from the pool. Rebuilds pool on dead connection."""
     global _pool
     pool = _get_pool()
     conn = pool.getconn()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        cur.close()
-        if conn.status != psycopg2.extensions.STATUS_READY:
+    # Only validate if connection is not in a ready state
+    if conn.status != psycopg2.extensions.STATUS_READY:
+        try:
             conn.rollback()
-    except Exception:
-        try:
-            pool.putconn(conn)
         except Exception:
-            pass
-        try:
-            pool.closeall()
-        except Exception:
-            pass
-        _pool = None
-        pool = _get_pool()
-        conn = pool.getconn()
+            try:
+                pool.putconn(conn)
+            except Exception:
+                pass
+            try:
+                pool.closeall()
+            except Exception:
+                pass
+            _pool = None
+            pool = _get_pool()
+            conn = pool.getconn()
     return conn
 
 
@@ -162,17 +179,24 @@ def init_db():
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def get_config(guild_id: str, key: str, default=None):
+    cache_key = f"{guild_id}:{key}"
+    cached, hit = _cache_get(cache_key)
+    if hit:
+        return cached
     conn = _get_conn()
     try:
         c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        c.execute("SELECT value FROM config WHERE key=%s", (f"{guild_id}:{key}",))
+        c.execute("SELECT value FROM config WHERE key=%s", (cache_key,))
         row = c.fetchone()
-        return row["value"] if row else default
+        result = row["value"] if row else default
+        _cache_set(cache_key, result)
+        return result
     finally:
         _put_conn(conn)
 
 
 def set_config(guild_id: str, key: str, value: str):
+    _cache_invalidate_guild(guild_id)
     conn = _get_conn()
     try:
         c = conn.cursor()
@@ -186,13 +210,19 @@ def set_config(guild_id: str, key: str, value: str):
 
 
 def get_all_config(guild_id: str) -> dict:
+    cache_key = f"__all__{guild_id}"
+    cached, hit = _cache_get(cache_key)
+    if hit:
+        return cached
     conn = _get_conn()
     try:
         c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         c.execute("SELECT key, value FROM config WHERE key LIKE %s", (f"{guild_id}:%",))
         rows = c.fetchall()
         prefix = f"{guild_id}:"
-        return {r["key"][len(prefix):]: r["value"] for r in rows}
+        result = {r["key"][len(prefix):]: r["value"] for r in rows}
+        _cache_set(cache_key, result)
+        return result
     finally:
         _put_conn(conn)
 
