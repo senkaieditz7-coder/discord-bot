@@ -27,26 +27,71 @@ def invalidate_config_cache(guild_id: str):
     _config_cache.pop(str(guild_id), None)
 
 
-async def is_mm_or_admin(member: discord.Member) -> bool:
+async def _get_roles(member: discord.Member) -> tuple[bool, bool]:
+    """Returns (is_mm, is_admin) based on roles + guild perms."""
     if member.guild_permissions.administrator:
-        return True
+        return True, True
     cfg      = await get_cached_config(str(member.guild.id))
     mm_id    = cfg.get("mm_role", "")
     admin_id = cfg.get("admin_role", "")
     role_ids = {r.id for r in member.roles}
-    if mm_id    and mm_id.isdigit()    and int(mm_id)    in role_ids: return True
-    if admin_id and admin_id.isdigit() and int(admin_id) in role_ids: return True
-    return False
+    is_admin = bool(admin_id and admin_id.isdigit() and int(admin_id) in role_ids)
+    is_mm    = bool(mm_id    and mm_id.isdigit()    and int(mm_id)    in role_ids)
+    return (is_mm or is_admin), is_admin
+
+
+async def is_mm_or_admin(member: discord.Member) -> bool:
+    mm, _ = await _get_roles(member)
+    return mm
 
 
 async def is_admin(member: discord.Member) -> bool:
-    if member.guild_permissions.administrator:
-        return True
-    cfg      = await get_cached_config(str(member.guild.id))
-    admin_id = cfg.get("admin_role", "")
-    if admin_id and admin_id.isdigit() and int(admin_id) in {r.id for r in member.roles}:
-        return True
-    return False
+    _, admin = await _get_roles(member)
+    return admin
+
+
+async def check_ticket_access(member: discord.Member, ticket: dict) -> tuple[bool, str]:
+    """
+    Gate for ALL ticket management actions (add user, close, transfer, etc.)
+
+    Rules:
+    - Server administrator or Admin role → always allowed
+    - MM role + ticket is unclaimed → allowed
+    - MM role + ticket claimed by this member → allowed (they own it)
+    - MM role + ticket claimed by someone else → DENIED
+    - Not MM at all → DENIED
+    """
+    is_mm, is_adm = await _get_roles(member)
+    if is_adm:
+        return True, ""
+    if not is_mm:
+        return False, "🚫 Only MM staff can perform this action."
+    claimed_by = ticket.get("claimed_by")
+    if claimed_by and claimed_by != str(member.id):
+        return False, f"🔒 This ticket is claimed by <@{claimed_by}>.\nOnly they can manage this ticket."
+    return True, ""
+
+
+async def check_unclaim_access(member: discord.Member, ticket: dict) -> tuple[bool, str]:
+    """
+    Unclaim is stricter: only the exact claimer (or Admin role / server admin) can unclaim.
+    Another MM who hasn't claimed it cannot unclaim.
+    """
+    is_mm, is_adm = await _get_roles(member)
+    if is_adm:
+        # Admin can unclaim anything
+        claimed_by = ticket.get("claimed_by")
+        if not claimed_by:
+            return False, "⚠️ This ticket has not been claimed by anyone."
+        return True, ""
+    if not is_mm:
+        return False, "🚫 Only MM staff can perform this action."
+    claimed_by = ticket.get("claimed_by")
+    if not claimed_by:
+        return False, "⚠️ This ticket has not been claimed yet."
+    if claimed_by != str(member.id):
+        return False, f"🔒 Only <@{claimed_by}> (the claimer) can unclaim this ticket."
+    return True, ""
 
 
 def _embed(title: str, description: str, color: discord.Color, footer: str = "") -> discord.Embed:
@@ -56,6 +101,12 @@ def _embed(title: str, description: str, color: discord.Color, footer: str = "")
     return e
 
 
+def _deny(reason: str) -> discord.Embed:
+    return discord.Embed(description=reason, color=discord.Color.red())
+
+
+# ── Ticket Buttons ────────────────────────────────────────────────────────────
+
 class TicketButtons(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -63,56 +114,67 @@ class TicketButtons(discord.ui.View):
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.green, custom_id="ticket_claim", emoji="✋")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can claim tickets.", discord.Color.red()), ephemeral=True)
+        is_mm, _ = await _get_roles(interaction.user)
+        if not is_mm:
+            await interaction.followup.send(embed=_deny("🚫 Only MM staff can claim tickets."), ephemeral=True)
             return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "This does not appear to be a ticket channel.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ This does not appear to be a ticket channel."), ephemeral=True)
             return
         if ticket["claimed_by"]:
             claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
             name = claimer.mention if claimer else f"<@{ticket['claimed_by']}>"
-            await interaction.followup.send(embed=_embed("⚠️ Already Claimed", f"This ticket is already claimed by {name}.", discord.Color.yellow()), ephemeral=True)
+            await interaction.followup.send(embed=_deny(f"🔒 Already claimed by {name}."), ephemeral=True)
             return
         await asyncio.to_thread(db.claim_ticket, str(interaction.channel_id), str(interaction.user.id))
         await interaction.channel.send(embed=discord.Embed(
             title="✅ Ticket Claimed",
             description=f"{interaction.user.mention} has claimed this ticket and will be assisting you.",
             color=discord.Color.green()
-        ).set_footer(text="Use the Unclaim button or /unclaim to release this ticket."))
+        ).set_footer(text="Only the claimer can manage this ticket. Use Unclaim to release it."))
         await interaction.followup.send("✅ Claimed!", ephemeral=True)
 
     @discord.ui.button(label="Unclaim", style=discord.ButtonStyle.gray, custom_id="ticket_unclaim", emoji="🔓")
     async def unclaim(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can unclaim tickets.", discord.Color.red()), ephemeral=True)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "This does not appear to be a ticket channel.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ This does not appear to be a ticket channel."), ephemeral=True)
             return
-        if not ticket["claimed_by"]:
-            await interaction.followup.send(embed=_embed("⚠️ Not Claimed", "This ticket has not been claimed yet.", discord.Color.yellow()), ephemeral=True)
+        ok, reason = await check_unclaim_access(interaction.user, ticket)
+        if not ok:
+            await interaction.followup.send(embed=_deny(reason), ephemeral=True)
             return
         await asyncio.to_thread(db.claim_ticket, str(interaction.channel_id), None)
         await interaction.channel.send(embed=discord.Embed(
             title="🔓 Ticket Unclaimed",
-            description=f"{interaction.user.mention} has unclaimed this ticket.\n\nAny available MM staff can now claim it using the **Claim** button.",
+            description=f"{interaction.user.mention} has unclaimed this ticket.\n\nAny available MM staff can now claim it.",
             color=discord.Color.orange()
         ).set_footer(text="Press Claim to take this ticket."))
         await interaction.followup.send("🔓 Unclaimed!", ephemeral=True)
 
     @discord.ui.button(label="Add User", style=discord.ButtonStyle.blurple, custom_id="ticket_adduser", emoji="➕")
     async def add_user(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check claim lock before showing modal
+        ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
+        if ticket:
+            ok, reason = await check_ticket_access(interaction.user, ticket)
+            if not ok:
+                await interaction.response.send_message(embed=_deny(reason), ephemeral=True)
+                return
         await interaction.response.send_modal(AddUserModal())
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.red, custom_id="ticket_close", emoji="🔒")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can close tickets.", discord.Color.red()), ephemeral=True)
+        ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
+        if not ticket:
+            await interaction.followup.send(embed=_deny("❌ This is not a ticket channel."), ephemeral=True)
+            return
+        ok, reason = await check_ticket_access(interaction.user, ticket)
+        if not ok:
+            await interaction.followup.send(embed=_deny(reason), ephemeral=True)
             return
         await interaction.channel.send(embed=_embed("🔒 Closing Ticket", "Saving transcript and closing channel...", discord.Color.red()))
         await interaction.delete_original_response()
@@ -124,22 +186,27 @@ class AddUserModal(discord.ui.Modal, title="Add User to Ticket"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can add users.", discord.Color.red()), ephemeral=True)
+        ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
+        if not ticket:
+            await interaction.followup.send(embed=_deny("❌ This is not a ticket channel."), ephemeral=True)
+            return
+        ok, reason = await check_ticket_access(interaction.user, ticket)
+        if not ok:
+            await interaction.followup.send(embed=_deny(reason), ephemeral=True)
             return
         raw = self.user_id.value.strip().strip("<@!>")
         try:
             uid = int(raw)
         except ValueError:
-            await interaction.followup.send(embed=_embed("❌ Invalid Input", "Please provide a valid User ID.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ Please provide a valid User ID."), ephemeral=True)
             return
         member = interaction.guild.get_member(uid)
         if not member:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "That user was not found in this server.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ That user was not found in this server."), ephemeral=True)
             return
         await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
         await asyncio.to_thread(db.add_ticket_user, str(interaction.channel_id), str(uid))
-        await interaction.followup.send(embed=_embed("➕ User Added", f"{member.mention} has been added to this ticket.", discord.Color.blurple()), ephemeral=True)
+        await interaction.followup.send(embed=_embed("➕ User Added", f"{member.mention} has been added.", discord.Color.blurple()), ephemeral=True)
         await interaction.channel.send(embed=discord.Embed(
             description=f"➕ {member.mention} has been added to this ticket.",
             color=discord.Color.blurple()
@@ -166,9 +233,9 @@ async def close_ticket_channel(channel: discord.TextChannel, guild: discord.Guil
             msg_count   = plain_text.count("\n") + 1 if plain_text.strip() else 0
 
             embed = discord.Embed(title=f"📄 Transcript — #{channel.name}", color=discord.Color.blurple())
-            embed.add_field(name="Type",      value=ticket_type,                                      inline=True)
-            embed.add_field(name="Opened by", value=opener.mention if opener else str(opener_id),     inline=True)
-            embed.add_field(name="Closed by", value=closer.mention,                                   inline=True)
+            embed.add_field(name="Type",      value=ticket_type,                                  inline=True)
+            embed.add_field(name="Opened by", value=opener.mention if opener else str(opener_id), inline=True)
+            embed.add_field(name="Closed by", value=closer.mention,                               inline=True)
             if claimer:
                 embed.add_field(name="Claimed by", value=claimer.mention, inline=True)
             embed.add_field(name="Messages", value=str(msg_count), inline=True)
@@ -252,43 +319,42 @@ class Tickets(commands.Cog):
     @app_commands.command(name="claim", description="Claim this ticket as MM staff")
     async def claim(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can claim tickets.", discord.Color.red()), ephemeral=True)
+        is_mm, _ = await _get_roles(interaction.user)
+        if not is_mm:
+            await interaction.followup.send(embed=_deny("🚫 Only MM staff can claim tickets."), ephemeral=True)
             return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ This is not a ticket channel."), ephemeral=True)
             return
         if ticket["claimed_by"]:
             claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
             name = claimer.mention if claimer else f"<@{ticket['claimed_by']}>"
-            await interaction.followup.send(embed=_embed("⚠️ Already Claimed", f"This ticket is already claimed by {name}.", discord.Color.yellow()), ephemeral=True)
+            await interaction.followup.send(embed=_deny(f"🔒 Already claimed by {name}."), ephemeral=True)
             return
         await asyncio.to_thread(db.claim_ticket, str(interaction.channel_id), str(interaction.user.id))
         await interaction.channel.send(embed=discord.Embed(
             title="✅ Ticket Claimed",
             description=f"{interaction.user.mention} has claimed this ticket and will be assisting you.",
             color=discord.Color.green()
-        ).set_footer(text="Use /unclaim or the Unclaim button to release this ticket."))
+        ).set_footer(text="Only the claimer can manage this ticket. Use /unclaim to release it."))
         await interaction.followup.send("✅ Claimed!", ephemeral=True)
 
-    @app_commands.command(name="unclaim", description="Release your claim on this ticket so another MM can take it")
+    @app_commands.command(name="unclaim", description="Release your claim on this ticket (claimer only)")
     async def unclaim(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can unclaim tickets.", discord.Color.red()), ephemeral=True)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ This is not a ticket channel."), ephemeral=True)
             return
-        if not ticket["claimed_by"]:
-            await interaction.followup.send(embed=_embed("⚠️ Not Claimed", "This ticket has not been claimed by anyone.", discord.Color.yellow()), ephemeral=True)
+        ok, reason = await check_unclaim_access(interaction.user, ticket)
+        if not ok:
+            await interaction.followup.send(embed=_deny(reason), ephemeral=True)
             return
         await asyncio.to_thread(db.claim_ticket, str(interaction.channel_id), None)
         await interaction.channel.send(embed=discord.Embed(
             title="🔓 Ticket Unclaimed",
-            description=f"{interaction.user.mention} has unclaimed this ticket.\n\nAny available MM staff can now claim it using the **Claim** button.",
+            description=f"{interaction.user.mention} has unclaimed this ticket.\n\nAny available MM staff can now claim it.",
             color=discord.Color.orange()
         ).set_footer(text="Press Claim to take this ticket."))
         await interaction.followup.send("🔓 Unclaimed!", ephemeral=True)
@@ -296,12 +362,13 @@ class Tickets(commands.Cog):
     @app_commands.command(name="close", description="Close and archive this ticket")
     async def close(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can close tickets.", discord.Color.red()), ephemeral=True)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ This is not a ticket channel."), ephemeral=True)
+            return
+        ok, reason = await check_ticket_access(interaction.user, ticket)
+        if not ok:
+            await interaction.followup.send(embed=_deny(reason), ephemeral=True)
             return
         await interaction.followup.send(embed=_embed("🔒 Closing Ticket", "Saving transcript and closing channel...", discord.Color.red()))
         await close_ticket_channel(interaction.channel, interaction.guild, interaction.user)
@@ -310,12 +377,13 @@ class Tickets(commands.Cog):
     @app_commands.describe(user="The user to add")
     async def adduser(self, interaction: discord.Interaction, user: discord.Member):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can add users.", discord.Color.red()), ephemeral=True)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ This is not a ticket channel."), ephemeral=True)
+            return
+        ok, reason = await check_ticket_access(interaction.user, ticket)
+        if not ok:
+            await interaction.followup.send(embed=_deny(reason), ephemeral=True)
             return
         await interaction.channel.set_permissions(user, read_messages=True, send_messages=True)
         await asyncio.to_thread(db.add_ticket_user, str(interaction.channel_id), str(user.id))
@@ -326,12 +394,13 @@ class Tickets(commands.Cog):
     @app_commands.describe(user="The user to remove")
     async def removeuser(self, interaction: discord.Interaction, user: discord.Member):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can remove users.", discord.Color.red()), ephemeral=True)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ This is not a ticket channel."), ephemeral=True)
+            return
+        ok, reason = await check_ticket_access(interaction.user, ticket)
+        if not ok:
+            await interaction.followup.send(embed=_deny(reason), ephemeral=True)
             return
         await interaction.channel.set_permissions(user, overwrite=None)
         await asyncio.to_thread(db.remove_ticket_user, str(interaction.channel_id), str(user.id))
@@ -342,12 +411,13 @@ class Tickets(commands.Cog):
     @app_commands.describe(mm="The MM to transfer to")
     async def transfer(self, interaction: discord.Interaction, mm: discord.Member):
         await interaction.response.defer(ephemeral=True)
-        if not await is_mm_or_admin(interaction.user):
-            await interaction.followup.send(embed=_embed("🚫 Access Denied", "Only MM staff can transfer tickets.", discord.Color.red()), ephemeral=True)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(interaction.channel_id))
         if not ticket:
-            await interaction.followup.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), ephemeral=True)
+            await interaction.followup.send(embed=_deny("❌ This is not a ticket channel."), ephemeral=True)
+            return
+        ok, reason = await check_ticket_access(interaction.user, ticket)
+        if not ok:
+            await interaction.followup.send(embed=_deny(reason), ephemeral=True)
             return
         await asyncio.to_thread(db.transfer_ticket, str(interaction.channel_id), str(mm.id))
         await interaction.channel.set_permissions(mm, read_messages=True, send_messages=True)
@@ -362,64 +432,65 @@ class Tickets(commands.Cog):
 
     @commands.command(name="claim")
     async def claim_prefix(self, ctx: commands.Context):
-        if not await is_mm_or_admin(ctx.author):
-            await ctx.send(embed=_embed("🚫 Access Denied", "Only MM staff can claim tickets.", discord.Color.red()), delete_after=10)
+        is_mm, _ = await _get_roles(ctx.author)
+        if not is_mm:
+            await ctx.send(embed=_deny("🚫 Only MM staff can claim tickets."), delete_after=10)
             return
         ticket = await asyncio.to_thread(db.get_ticket, str(ctx.channel.id))
         if not ticket:
-            await ctx.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), delete_after=10)
+            await ctx.send(embed=_deny("❌ This is not a ticket channel."), delete_after=10)
             return
         if ticket["claimed_by"]:
             claimer = ctx.guild.get_member(int(ticket["claimed_by"]))
             name = claimer.mention if claimer else f"<@{ticket['claimed_by']}>"
-            await ctx.send(embed=_embed("⚠️ Already Claimed", f"Already claimed by {name}.", discord.Color.yellow()))
+            await ctx.send(embed=_deny(f"🔒 Already claimed by {name}."))
             return
         await asyncio.to_thread(db.claim_ticket, str(ctx.channel.id), str(ctx.author.id))
         await ctx.send(embed=discord.Embed(
             title="✅ Ticket Claimed",
             description=f"{ctx.author.mention} has claimed this ticket and will be assisting you.",
             color=discord.Color.green()
-        ).set_footer(text="Use $unclaim or the Unclaim button to release this ticket."))
+        ).set_footer(text="Only the claimer can manage this ticket. Use $unclaim to release it."))
 
     @commands.command(name="unclaim")
     async def unclaim_prefix(self, ctx: commands.Context):
-        if not await is_mm_or_admin(ctx.author):
-            await ctx.send(embed=_embed("🚫 Access Denied", "Only MM staff can unclaim tickets.", discord.Color.red()), delete_after=10)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(ctx.channel.id))
         if not ticket:
-            await ctx.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), delete_after=10)
+            await ctx.send(embed=_deny("❌ This is not a ticket channel."), delete_after=10)
             return
-        if not ticket["claimed_by"]:
-            await ctx.send(embed=_embed("⚠️ Not Claimed", "This ticket has not been claimed yet.", discord.Color.yellow()))
+        ok, reason = await check_unclaim_access(ctx.author, ticket)
+        if not ok:
+            await ctx.send(embed=_deny(reason), delete_after=10)
             return
         await asyncio.to_thread(db.claim_ticket, str(ctx.channel.id), None)
         await ctx.send(embed=discord.Embed(
             title="🔓 Ticket Unclaimed",
-            description=f"{ctx.author.mention} has unclaimed this ticket.\n\nAny available MM staff can now claim it using the **Claim** button.",
+            description=f"{ctx.author.mention} has unclaimed this ticket.\n\nAny available MM staff can now claim it.",
             color=discord.Color.orange()
         ).set_footer(text="Press Claim to take this ticket."))
 
     @commands.command(name="close")
     async def close_prefix(self, ctx: commands.Context):
-        if not await is_mm_or_admin(ctx.author):
-            await ctx.send(embed=_embed("🚫 Access Denied", "Only MM staff can close tickets.", discord.Color.red()), delete_after=10)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(ctx.channel.id))
         if not ticket:
-            await ctx.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), delete_after=10)
+            await ctx.send(embed=_deny("❌ This is not a ticket channel."), delete_after=10)
+            return
+        ok, reason = await check_ticket_access(ctx.author, ticket)
+        if not ok:
+            await ctx.send(embed=_deny(reason), delete_after=10)
             return
         await ctx.send(embed=_embed("🔒 Closing Ticket", "Saving transcript and closing channel...", discord.Color.red()))
         await close_ticket_channel(ctx.channel, ctx.guild, ctx.author)
 
     @commands.command(name="adduser")
     async def adduser_prefix(self, ctx: commands.Context, user: discord.Member):
-        if not await is_mm_or_admin(ctx.author):
-            await ctx.send(embed=_embed("🚫 Access Denied", "Only MM staff can add users.", discord.Color.red()), delete_after=10)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(ctx.channel.id))
         if not ticket:
-            await ctx.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), delete_after=10)
+            await ctx.send(embed=_deny("❌ This is not a ticket channel."), delete_after=10)
+            return
+        ok, reason = await check_ticket_access(ctx.author, ticket)
+        if not ok:
+            await ctx.send(embed=_deny(reason), delete_after=10)
             return
         await ctx.channel.set_permissions(user, read_messages=True, send_messages=True)
         await asyncio.to_thread(db.add_ticket_user, str(ctx.channel.id), str(user.id))
@@ -427,12 +498,13 @@ class Tickets(commands.Cog):
 
     @commands.command(name="removeuser")
     async def removeuser_prefix(self, ctx: commands.Context, user: discord.Member):
-        if not await is_mm_or_admin(ctx.author):
-            await ctx.send(embed=_embed("🚫 Access Denied", "Only MM staff can remove users.", discord.Color.red()), delete_after=10)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(ctx.channel.id))
         if not ticket:
-            await ctx.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), delete_after=10)
+            await ctx.send(embed=_deny("❌ This is not a ticket channel."), delete_after=10)
+            return
+        ok, reason = await check_ticket_access(ctx.author, ticket)
+        if not ok:
+            await ctx.send(embed=_deny(reason), delete_after=10)
             return
         await ctx.channel.set_permissions(user, overwrite=None)
         await asyncio.to_thread(db.remove_ticket_user, str(ctx.channel.id), str(user.id))
@@ -440,12 +512,13 @@ class Tickets(commands.Cog):
 
     @commands.command(name="transfer")
     async def transfer_prefix(self, ctx: commands.Context, mm: discord.Member):
-        if not await is_mm_or_admin(ctx.author):
-            await ctx.send(embed=_embed("🚫 Access Denied", "Only MM staff can transfer tickets.", discord.Color.red()), delete_after=10)
-            return
         ticket = await asyncio.to_thread(db.get_ticket, str(ctx.channel.id))
         if not ticket:
-            await ctx.send(embed=_embed("❌ Not Found", "This is not a ticket channel.", discord.Color.red()), delete_after=10)
+            await ctx.send(embed=_deny("❌ This is not a ticket channel."), delete_after=10)
+            return
+        ok, reason = await check_ticket_access(ctx.author, ticket)
+        if not ok:
+            await ctx.send(embed=_deny(reason), delete_after=10)
             return
         await asyncio.to_thread(db.transfer_ticket, str(ctx.channel.id), str(mm.id))
         await ctx.channel.set_permissions(mm, read_messages=True, send_messages=True)
