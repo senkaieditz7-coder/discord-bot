@@ -9,17 +9,12 @@ class Admin(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    async def _is_admin(self, member: discord.Member):
-        admin_role_id = await asyncio.to_thread(db.get_config, str(member.guild.id), "admin_role")
-        if admin_role_id and any(r.id == int(admin_role_id) for r in member.roles):
-            return True
-        return member.guild_permissions.administrator
-
     @app_commands.command(name="blacklist", description="Blacklist a user from opening tickets")
     @app_commands.describe(user="User to blacklist", reason="Reason for blacklist")
     async def blacklist(self, interaction: discord.Interaction, user: discord.Member, reason: str = "No reason provided"):
         await interaction.response.defer(ephemeral=True)
-        if not await self._is_admin(interaction.user):
+        from cogs.tickets import is_admin
+        if not await is_admin(interaction.user):
             await interaction.followup.send("Only admins can blacklist users.", ephemeral=True)
             return
         await asyncio.to_thread(db.blacklist_user, str(user.id), str(interaction.guild_id), reason, str(interaction.user.id))
@@ -32,7 +27,8 @@ class Admin(commands.Cog):
     @app_commands.describe(user="User to unblacklist")
     async def unblacklist(self, interaction: discord.Interaction, user: discord.Member):
         await interaction.response.defer(ephemeral=True)
-        if not await self._is_admin(interaction.user):
+        from cogs.tickets import is_admin
+        if not await is_admin(interaction.user):
             await interaction.followup.send("Only admins can unblacklist users.", ephemeral=True)
             return
         await asyncio.to_thread(db.unblacklist_user, str(user.id), str(interaction.guild_id))
@@ -81,18 +77,19 @@ class Admin(commands.Cog):
             return
         s = await asyncio.to_thread(db.get_stats, str(interaction.guild_id))
         embed = discord.Embed(title="Bot Statistics 📊", color=discord.Color.blurple())
-        embed.add_field(name="Total Tickets",        value=str(s["total_tickets"]),  inline=True)
-        embed.add_field(name="Open Tickets",         value=str(s["open_tickets"]),   inline=True)
-        embed.add_field(name="Total Vouches",        value=str(s["total_vouches"]),  inline=True)
-        embed.add_field(name="Total Confirmations",  value=str(s["total_confirms"]), inline=True)
-        embed.add_field(name="Total Deposits",       value=str(s["total_deposits"]), inline=True)
+        embed.add_field(name="Total Tickets",       value=str(s["total_tickets"]),  inline=True)
+        embed.add_field(name="Open Tickets",        value=str(s["open_tickets"]),   inline=True)
+        embed.add_field(name="Total Vouches",       value=str(s["total_vouches"]),  inline=True)
+        embed.add_field(name="Total Confirmations", value=str(s["total_confirms"]), inline=True)
+        embed.add_field(name="Total Deposits",      value=str(s["total_deposits"]), inline=True)
         embed.set_footer(text=f"Requested by {interaction.user}")
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="purge", description="Bulk delete messages in this channel")
     @app_commands.describe(amount="Number of messages to delete (1-100)")
     async def purge(self, interaction: discord.Interaction, amount: app_commands.Range[int, 1, 100] = 10):
-        if not await self._is_admin(interaction.user):
+        from cogs.tickets import is_admin
+        if not await is_admin(interaction.user):
             await interaction.response.send_message("Only admins can purge messages.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
@@ -114,7 +111,8 @@ class Admin(commands.Cog):
                   embed_title: str = None, embed_color: str = None, image_url: str = None,
                   anonymous: bool = False, button_label: str = None, button_url: str = None):
         await interaction.response.defer(ephemeral=True)
-        if not await self._is_admin(interaction.user):
+        from cogs.tickets import is_admin
+        if not await is_admin(interaction.user):
             await interaction.followup.send("Only admins can use this command.", ephemeral=True)
             return
         target = channel or interaction.channel
@@ -140,14 +138,14 @@ class Admin(commands.Cog):
     @app_commands.command(name="aboutus", description="Display the About Us embed")
     async def aboutus(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        from cogs.tickets import is_mm_or_admin
+        from cogs.tickets import is_mm_or_admin, get_cached_config
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only MM staff or higher can use this command.", ephemeral=True)
             return
-        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        cfg     = await get_cached_config(str(interaction.guild_id))
         message = cfg.get("aboutus_message", "We are a trusted middleman service for safe trades.")
         image   = cfg.get("aboutus_image", "")
-        embed = discord.Embed(title=f"About {interaction.guild.name}", description=message, color=discord.Color.blurple())
+        embed   = discord.Embed(title=f"About {interaction.guild.name}", description=message, color=discord.Color.blurple())
         embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
         if image:
             embed.set_image(url=image)
@@ -157,8 +155,8 @@ class Admin(commands.Cog):
 
     @commands.command(name="blacklist")
     async def blacklist_prefix(self, ctx: commands.Context, user: discord.Member, *, reason: str = "No reason provided"):
-        """Blacklist a user from opening tickets."""
-        if not await self._is_admin(ctx.author):
+        from cogs.tickets import is_admin
+        if not await is_admin(ctx.author):
             await ctx.send("Only admins can blacklist users.", delete_after=10)
             return
         await asyncio.to_thread(db.blacklist_user, str(user.id), str(ctx.guild.id), reason, str(ctx.author.id))
@@ -169,8 +167,8 @@ class Admin(commands.Cog):
 
     @commands.command(name="unblacklist")
     async def unblacklist_prefix(self, ctx: commands.Context, user: discord.Member):
-        """Remove a user from the blacklist."""
-        if not await self._is_admin(ctx.author):
+        from cogs.tickets import is_admin
+        if not await is_admin(ctx.author):
             await ctx.send("Only admins can unblacklist users.", delete_after=10)
             return
         await asyncio.to_thread(db.unblacklist_user, str(user.id), str(ctx.guild.id))
@@ -182,7 +180,6 @@ class Admin(commands.Cog):
 
     @commands.command(name="tradeinfo")
     async def tradeinfo_prefix(self, ctx: commands.Context, channel: discord.TextChannel = None):
-        """Get details on a trade ticket by channel."""
         from cogs.tickets import is_mm_or_admin
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only staff can view trade info.", delete_after=10)
@@ -211,7 +208,6 @@ class Admin(commands.Cog):
 
     @commands.command(name="stats")
     async def stats_prefix(self, ctx: commands.Context):
-        """View full bot statistics."""
         from cogs.tickets import is_mm_or_admin
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only staff can view stats.", delete_after=10)
@@ -228,8 +224,8 @@ class Admin(commands.Cog):
 
     @commands.command(name="purge")
     async def purge_prefix(self, ctx: commands.Context, amount: int = 10):
-        """Bulk delete messages in this channel."""
-        if not await self._is_admin(ctx.author):
+        from cogs.tickets import is_admin
+        if not await is_admin(ctx.author):
             await ctx.send("Only admins can purge messages.", delete_after=10)
             return
         amount = max(1, min(100, amount))
@@ -244,15 +240,14 @@ class Admin(commands.Cog):
 
     @commands.command(name="aboutus")
     async def aboutus_prefix(self, ctx: commands.Context):
-        """Display the About Us embed. (MM or higher only)"""
-        from cogs.tickets import is_mm_or_admin
+        from cogs.tickets import is_mm_or_admin, get_cached_config
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff or higher can use this command.", delete_after=10)
             return
-        cfg = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
+        cfg     = await get_cached_config(str(ctx.guild.id))
         message = cfg.get("aboutus_message", "We are a trusted middleman service for safe trades.")
         image   = cfg.get("aboutus_image", "")
-        embed = discord.Embed(title=f"About {ctx.guild.name}", description=message, color=discord.Color.blurple())
+        embed   = discord.Embed(title=f"About {ctx.guild.name}", description=message, color=discord.Color.blurple())
         embed.set_thumbnail(url=ctx.guild.icon.url if ctx.guild.icon else None)
         if image:
             embed.set_image(url=image)
@@ -260,8 +255,8 @@ class Admin(commands.Cog):
 
     @commands.command(name="say")
     async def say_prefix(self, ctx: commands.Context, *, message: str):
-        """[Admin] Send a message as the bot."""
-        if not await self._is_admin(ctx.author):
+        from cogs.tickets import is_admin
+        if not await is_admin(ctx.author):
             await ctx.send("Only admins can use this command.", delete_after=10)
             return
         try:
