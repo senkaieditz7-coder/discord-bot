@@ -2,20 +2,43 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
+import time
 import db
 from cogs.transcripts import save_transcript, build_html_transcript
 
 
-async def is_mm_or_admin(member: discord.Member):
-    guild    = member.guild
-    mm_id    = await asyncio.to_thread(db.get_config, str(guild.id), "mm_role")
-    admin_id = await asyncio.to_thread(db.get_config, str(guild.id), "admin_role")
-    mm_role    = guild.get_role(int(mm_id))    if mm_id    and mm_id.isdigit()    else None
-    admin_role = guild.get_role(int(admin_id)) if admin_id and admin_id.isdigit() else None
-    roles = [r.id for r in member.roles]
-    if mm_role    and mm_role.id    in roles: return True
-    if admin_role and admin_role.id in roles: return True
-    if member.guild_permissions.administrator:   return True
+# ── Simple TTL cache for guild config (roles don't change often) ─────────────
+_config_cache: dict[str, tuple[float, dict]] = {}
+_CACHE_TTL = 60  # seconds
+
+
+async def _get_cached_config(guild_id: str) -> dict:
+    now = time.monotonic()
+    if guild_id in _config_cache:
+        ts, data = _config_cache[guild_id]
+        if now - ts < _CACHE_TTL:
+            return data
+    data = await asyncio.to_thread(db.get_all_config, guild_id)
+    _config_cache[guild_id] = (now, data)
+    return data
+
+
+def invalidate_config_cache(guild_id: str):
+    _config_cache.pop(str(guild_id), None)
+
+
+async def is_mm_or_admin(member: discord.Member) -> bool:
+    """Returns True if member has MM role, Admin role, or server administrator permission."""
+    cfg      = await _get_cached_config(str(member.guild.id))
+    mm_id    = cfg.get("mm_role", "")
+    admin_id = cfg.get("admin_role", "")
+
+    if member.guild_permissions.administrator:
+        return True
+
+    role_ids = {r.id for r in member.roles}
+    if mm_id    and mm_id.isdigit()    and int(mm_id)    in role_ids: return True
+    if admin_id and admin_id.isdigit() and int(admin_id) in role_ids: return True
     return False
 
 
@@ -143,11 +166,12 @@ class Tickets(commands.Cog):
         category_key = "ticket_category" if ticket_type == "trade" else (
             "automm_category" if ticket_type == "automm" else "support_category"
         )
-        cat_id   = await asyncio.to_thread(db.get_config, str(guild.id), category_key)
+        cfg      = await _get_cached_config(str(guild.id))
+        cat_id   = cfg.get(category_key, "")
         category = guild.get_channel(int(cat_id)) if cat_id and cat_id.isdigit() else None
 
-        mm_id    = await asyncio.to_thread(db.get_config, str(guild.id), "mm_role")
-        admin_id = await asyncio.to_thread(db.get_config, str(guild.id), "admin_role")
+        mm_id    = cfg.get("mm_role", "")
+        admin_id = cfg.get("admin_role", "")
         mm_role    = guild.get_role(int(mm_id))    if mm_id    and mm_id.isdigit()    else None
         admin_role = guild.get_role(int(admin_id)) if admin_id and admin_id.isdigit() else None
 
@@ -169,14 +193,12 @@ class Tickets(commands.Cog):
 
         await asyncio.to_thread(db.create_ticket, str(channel.id), str(guild.id), str(opener.id), ticket_type)
 
-        # For trade/support — the calling modal sends the details embed + TicketButtons.
-        # For automm — the AutoMM cog handles the welcome message.
         if ticket_type == "automm":
             automm_cog = self.bot.get_cog("AutoMM")
             if automm_cog:
                 await automm_cog._start_session(channel, guild, opener)
 
-        log_channel_id = await asyncio.to_thread(db.get_config, str(guild.id), "log_channel")
+        log_channel_id = cfg.get("log_channel", "")
         if log_channel_id:
             lc = guild.get_channel(int(log_channel_id))
             if lc:
