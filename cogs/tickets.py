@@ -7,12 +7,13 @@ import db
 from cogs.transcripts import save_transcript, build_html_transcript
 
 
-# ── Simple TTL cache for guild config (roles don't change often) ─────────────
+# ── Shared TTL config cache (60s) — used by all cogs via import ──────────────
 _config_cache: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL = 60  # seconds
 
 
-async def _get_cached_config(guild_id: str) -> dict:
+async def get_cached_config(guild_id: str) -> dict:
+    """Fetch guild config from cache (60s TTL). Import this in other cogs."""
     now = time.monotonic()
     if guild_id in _config_cache:
         ts, data = _config_cache[guild_id]
@@ -24,21 +25,31 @@ async def _get_cached_config(guild_id: str) -> dict:
 
 
 def invalidate_config_cache(guild_id: str):
+    """Call after botedit saves to force next access to re-fetch."""
     _config_cache.pop(str(guild_id), None)
 
 
 async def is_mm_or_admin(member: discord.Member) -> bool:
-    """Returns True if member has MM role, Admin role, or server administrator permission."""
-    cfg      = await _get_cached_config(str(member.guild.id))
-    mm_id    = cfg.get("mm_role", "")
-    admin_id = cfg.get("admin_role", "")
-
+    """True if member has MM role, Admin role, or server administrator permission."""
     if member.guild_permissions.administrator:
         return True
-
+    cfg      = await get_cached_config(str(member.guild.id))
+    mm_id    = cfg.get("mm_role", "")
+    admin_id = cfg.get("admin_role", "")
     role_ids = {r.id for r in member.roles}
     if mm_id    and mm_id.isdigit()    and int(mm_id)    in role_ids: return True
     if admin_id and admin_id.isdigit() and int(admin_id) in role_ids: return True
+    return False
+
+
+async def is_admin(member: discord.Member) -> bool:
+    """True if member has Admin role or server administrator permission (NOT just MM)."""
+    if member.guild_permissions.administrator:
+        return True
+    cfg      = await get_cached_config(str(member.guild.id))
+    admin_id = cfg.get("admin_role", "")
+    if admin_id and admin_id.isdigit() and int(admin_id) in {r.id for r in member.roles}:
+        return True
     return False
 
 
@@ -62,12 +73,11 @@ class TicketButtons(discord.ui.View):
             await interaction.followup.send(f"Already claimed by {name}.", ephemeral=True)
             return
         await asyncio.to_thread(db.claim_ticket, str(interaction.channel_id), str(interaction.user.id))
-        embed = discord.Embed(
+        await interaction.followup.send(embed=discord.Embed(
             title="Ticket Claimed",
             description=f"{interaction.user.mention} has claimed this ticket.",
             color=discord.Color.green()
-        )
-        await interaction.followup.send(embed=embed)
+        ))
 
     @discord.ui.button(label="Add User", style=discord.ButtonStyle.blurple, custom_id="ticket_adduser", emoji="➕")
     async def add_user(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -112,10 +122,10 @@ async def close_ticket_channel(channel: discord.TextChannel, guild: discord.Guil
     ticket     = await asyncio.to_thread(db.get_ticket, str(channel.id))
     plain_text = await save_transcript(channel, guild)
     await asyncio.to_thread(db.close_ticket, str(channel.id), plain_text)
-
     html_bytes = await build_html_transcript(channel, guild, ticket or {}, closer)
 
-    transcript_channel_id = await asyncio.to_thread(db.get_config, str(guild.id), "transcript_channel")
+    cfg                   = await get_cached_config(str(guild.id))
+    transcript_channel_id = cfg.get("transcript_channel", "")
     if transcript_channel_id:
         tc = guild.get_channel(int(transcript_channel_id))
         if tc:
@@ -134,13 +144,12 @@ async def close_ticket_channel(channel: discord.TextChannel, guild: discord.Guil
                 embed.add_field(name="Claimed by", value=claimer.mention, inline=True)
             embed.add_field(name="Messages", value=str(msg_count), inline=True)
             embed.set_footer(text="Open the .html file in any browser to view the full transcript")
-
             await tc.send(
                 embed=embed,
                 file=discord.File(fp=_io.BytesIO(html_bytes), filename=f"transcript-{channel.name}.html")
             )
 
-    log_channel_id = await asyncio.to_thread(db.get_config, str(guild.id), "log_channel")
+    log_channel_id = cfg.get("log_channel", "")
     if log_channel_id:
         lc = guild.get_channel(int(log_channel_id))
         if lc:
@@ -163,10 +172,10 @@ class Tickets(commands.Cog):
         if bl:
             return None, "blacklisted"
 
+        cfg          = await get_cached_config(str(guild.id))
         category_key = "ticket_category" if ticket_type == "trade" else (
             "automm_category" if ticket_type == "automm" else "support_category"
         )
-        cfg      = await _get_cached_config(str(guild.id))
         cat_id   = cfg.get(category_key, "")
         category = guild.get_channel(int(cat_id)) if cat_id and cat_id.isdigit() else None
 
@@ -190,7 +199,6 @@ class Tickets(commands.Cog):
             overwrites=overwrites,
             reason=f"Ticket opened by {opener}"
         )
-
         await asyncio.to_thread(db.create_ticket, str(channel.id), str(guild.id), str(opener.id), ticket_type)
 
         if ticket_type == "automm":
