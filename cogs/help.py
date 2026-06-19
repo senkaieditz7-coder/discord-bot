@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 
-# ── Prefix support chart (which commands have $prefix variants) ───────────────
+# ── Prefix support chart ──────────────────────────────────────────────────────
 PREFIX_CHART = """```
 Command            Prefix ($)   Slash (/)
 ─────────────────────────────────────────
@@ -16,12 +16,15 @@ fill               ✅            ✅
 help               ✅            ✅
 aboutus            ✅            ✅
 claim              ✅            ✅
+unclaim            ✅            ✅
 close              ✅            ✅
 adduser            ✅            ✅
 removeuser         ✅            ✅
 transfer           ✅            ✅
 confirm            ✅            ✅
 mercy              ✅            ✅
+hold               ✅            ✅
+unhold             ✅            ✅
 blacklist          ✅            ✅
 unblacklist        ✅            ✅
 tradeinfo          ✅            ✅
@@ -31,9 +34,10 @@ say                ✅            ✅
 depositcheck       ✅            ✅
 depositdelete      ✅            ✅
 sync               ✅            ❌
+clearglobal        ✅            ❌
 debug              ✅            ❌
 ─────────────────────────────────────────
-depositset         ❌            ✅  (modal required)
+depositset         ❌            ✅  (modal)
 botedit            ❌            ✅  (owner only)
 botrestart         ❌            ✅  (owner only)
 ticketpanel        ❌            ✅
@@ -43,14 +47,20 @@ autommpanel        ❌            ✅
 
 COMMANDS = {
     "📋 Prefix Chart": [
-        ("Chart shows all commands and whether they support $ prefix or / slash", PREFIX_CHART),
+        ("Chart", PREFIX_CHART),
     ],
     "🎫 Tickets": [
-        ("$claim  /  /claim", "[MM+] Claim this ticket as your own"),
-        ("$close  /  /close", "[MM+] Close and delete this ticket channel"),
-        ("$adduser @user  /  /adduser @user", "[MM+] Add a user to this ticket"),
-        ("$removeuser @user  /  /removeuser @user", "[MM+] Remove a user from this ticket"),
-        ("$transfer @mm  /  /transfer @mm", "[MM+] Transfer ticket to another middleman"),
+        ("$claim  /  /claim", "[MM+] Claim this ticket — locks it to you. Other MMs are blocked until you unclaim."),
+        ("$unclaim  /  /unclaim", "[MM+] Release your claim so another MM can take the ticket. Only the claimer (or Admin) can unclaim."),
+        ("$close  /  /close", "[MM+] Close and archive this ticket. Only the claimer (or Admin) can close a claimed ticket."),
+        ("$adduser @user  /  /adduser @user", "[MM+] Add a user to this ticket. Claimer-locked if ticket is claimed."),
+        ("$removeuser @user  /  /removeuser @user", "[MM+] Remove a user from this ticket. Claimer-locked if ticket is claimed."),
+        ("$transfer @mm  /  /transfer @mm", "[MM+] Transfer this ticket to another MM. Claimer-locked if ticket is claimed."),
+    ],
+    "⏳ Mercy Timer": [
+        ("$mercy @user  /  /mercy @user", "[MM+] Send a mercy/special invite embed with Accept/Decline buttons. If used inside a ticket, starts a 5-minute auto-close countdown."),
+        ("$hold  /  /hold", "[MM+] Pause the mercy auto-close timer for this ticket. Shows time remaining."),
+        ("$unhold  /  /unhold", "[MM+] Resume the mercy auto-close timer. Picks up where it left off."),
     ],
     "✅ Trade Confirmation": [
         ("$confirm @user1 @user2  /  /confirm @user1 @user2", "[MM+] Send a trade confirmation — both traders must Accept or Decline"),
@@ -72,34 +82,32 @@ COMMANDS = {
         ("$tradeinfo [#channel]  /  /tradeinfo [channel]", "[MM+] View full details on a ticket"),
         ("$stats  /  /stats", "[MM+] View full bot statistics"),
         ("$purge [amount]  /  /purge amount", "[Admin] Bulk delete 1–100 messages"),
-        ("$say message  /  /say message ...", "[Admin] Send a message or embed as the bot"),
+        ("$say message  /  /say message", "[Admin] Send a message or embed as the bot"),
         ("$aboutus  /  /aboutus", "[MM+] Display the About Us embed"),
     ],
     "💸 Fees": [
         ("$fees  /  /fees", "[MM+] Post the middleman fee embed with Split / Full-Fee buttons"),
     ],
-    "🌟 Mercy": [
-        ("$mercy @user  /  /mercy @user", "[MM+] Send a mercy/special invite embed with Accept/Decline buttons"),
-    ],
     "🎭 Fill": [
         ("$fill  /  /fill", "[MM+] Grant yourself all roles below your highest role"),
     ],
     "🎨 Panels": [
-        ("/ticketpanel", "[MM+] Post the trade ticket panel (slash only)"),
-        ("/supportpanel", "[MM+] Post the support ticket panel (slash only)"),
-        ("/autommpanel", "[MM+] Post the Auto MM panel (slash only)"),
+        ("/ticketpanel", "[MM+] Post the trade ticket panel in this channel"),
+        ("/supportpanel", "[MM+] Post the support ticket panel in this channel"),
+        ("/autommpanel", "[MM+] Post the Auto MM panel — users pick a service from the dropdown, ticket creates instantly. Re-run this after changing options via /botedit."),
     ],
     "🤖 Auto MM": [
-        ("Open ticket from panel", "Select a service from the dropdown → bot walks both traders through the trade"),
-        ("`done` (type in ticket channel)", "Mark yourself ready — both traders must type this to proceed"),
-        ("`.automm` (type in any channel)", "Sender: confirm payment has been sent"),
-        ("`.done` (type in ticket channel)", "Mark trade complete — funds released when both traders type this"),
+        ("Panel dropdown", "Select your service directly from the panel → ticket opens immediately, no second step"),
+        ("`done` in ticket channel", "Signal you're ready — both traders must type this to move to payment"),
+        ("`.automm` anywhere in server", "Sender: confirms payment has been sent — bot DMs you to verify"),
+        ("`.done` in ticket channel", "Mark trade complete — funds released when both traders type this"),
     ],
     "🎛️ Bot Config": [
-        ("/botedit", "[Owner only] Edit ALL bot settings — roles, channels, panels, modals (slash only)"),
-        ("/botrestart", "[Owner only] Restart the bot process (slash only)"),
-        ("$sync", "[Owner only] Instantly sync slash commands to this guild"),
-        ("$debug", "[Owner only] Show bot health — intents, cogs, command counts, latency"),
+        ("/botedit", "[Owner] Edit ALL bot settings — roles, channels, panels, modals, mercy messages (slash only)"),
+        ("/botrestart", "[Owner] Restart the bot process (slash only)"),
+        ("$sync", "[Owner] Sync slash commands to this guild — run after any new command is added"),
+        ("$clearglobal", "[Owner] Wipe all global slash commands — use to remove duplicates"),
+        ("$debug", "[Owner] Show bot health — intents, cogs, command counts, latency"),
     ],
 }
 
@@ -116,7 +124,6 @@ class HelpSelect(discord.ui.Select):
         embed = discord.Embed(title=f"Help — {category}", color=discord.Color.blurple())
 
         if category == "📋 Prefix Chart":
-            # Special display: full chart as a single field
             embed.description = entries[0][1]
             embed.set_footer(text="✅ = supported   ❌ = not available for that style")
         else:
@@ -136,21 +143,23 @@ def _overview_embed():
     lines = []
     for cat, cmds in COMMANDS.items():
         if cat == "📋 Prefix Chart":
-            lines.append(f"**{cat}** — shows which commands have `$` prefix support")
+            lines.append(f"**{cat}** — full table of every command and its $ / / support")
         else:
             lines.append(f"**{cat}** — {len(cmds)} command(s)")
     embed = discord.Embed(
         title="📖 Bot Help",
         description=(
             "Use the dropdown to browse commands by category.\n"
-            "Commands marked **[MM+]** require MM role or higher.\n"
-            "Commands marked **[Admin]** require the Admin role.\n"
-            "Commands marked **[Owner]** are restricted to the bot owner only.\n\n"
+            "**[MM+]** — requires MM role or higher.\n"
+            "**[Admin]** — requires Admin role.\n"
+            "**[Owner]** — bot owner only.\n\n"
+            "**Claim lock:** when a ticket is claimed, only the claimer + admins can manage it.\n"
+            "**Mercy timer:** using `$mercy` in a ticket starts a 5-min auto-close — pause with `$hold`.\n\n"
             + "\n".join(lines)
         ),
         color=discord.Color.blurple()
     )
-    embed.set_footer(text="Select a category to see detailed commands and syntax.")
+    embed.set_footer(text="Select a category below to see detailed commands and syntax.")
     return embed
 
 
@@ -169,7 +178,6 @@ class Help(commands.Cog):
 
     @commands.command(name="help")
     async def help_prefix(self, ctx: commands.Context):
-        """Display all bot commands. (MM or higher only)"""
         from cogs.tickets import is_mm_or_admin
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff or higher can use the help command.", delete_after=10)
