@@ -20,7 +20,8 @@ def _parse_link_buttons(raw: str) -> list:
 
 
 async def _add_link_buttons(view: discord.ui.View, guild_id, btn_key):
-    cfg = await asyncio.to_thread(db.get_all_config, str(guild_id))
+    from cogs.tickets import get_cached_config
+    cfg = await get_cached_config(str(guild_id))
     for label, url in _parse_link_buttons(cfg.get(btn_key, "")):
         view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label=label, url=url, row=1))
     return view
@@ -45,17 +46,14 @@ class TradeTicketModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-
         bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
         if bl:
             await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
             return
-
         cog = interaction.client.get_cog("Tickets")
         if not cog:
             await interaction.followup.send("Ticket system unavailable.", ephemeral=True)
             return
-
         channel, err = await cog.open_ticket(interaction.guild, interaction.user, "trade")
         if err == "blacklisted":
             await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
@@ -64,25 +62,21 @@ class TradeTicketModal(discord.ui.Modal):
             await interaction.followup.send("Failed to create ticket.", ephemeral=True)
             return
 
-        # Fetch custom question labels for the embed fields
-        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        from cogs.tickets import get_cached_config, TicketButtons
+        cfg = await get_cached_config(str(interaction.guild_id))
         q1  = cfg.get("ticket_q1") or "What is the trade?"
         q2  = cfg.get("ticket_q2") or "Other user (ID, @mention, or username)"
         q3  = cfg.get("ticket_q3") or "Can you join private servers using links?"
 
-        # Single message: trade details + action buttons
         embed = discord.Embed(title="📋 Trade Details", color=discord.Color.green())
         embed.add_field(name="Opened by", value=interaction.user.mention, inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
+        embed.add_field(name="\u200b",    value="\u200b",                  inline=True)
+        embed.add_field(name="\u200b",    value="\u200b",                  inline=True)
         embed.add_field(name=q1, value=self.ans1.value, inline=False)
         embed.add_field(name=q2, value=self.ans2.value, inline=False)
         embed.add_field(name=q3, value=self.ans3.value, inline=False)
         embed.set_footer(text=f"Submitted by {interaction.user}")
-
-        from cogs.tickets import TicketButtons
         await channel.send(embed=embed, view=TicketButtons())
-
         await interaction.followup.send(f"✅ Your ticket has been created: {channel.mention}", ephemeral=True)
 
 
@@ -102,17 +96,14 @@ class SupportTicketModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-
         bl = await asyncio.to_thread(db.is_blacklisted, str(interaction.user.id), str(interaction.guild_id))
         if bl:
             await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
             return
-
         cog = interaction.client.get_cog("Tickets")
         if not cog:
             await interaction.followup.send("Ticket system unavailable.", ephemeral=True)
             return
-
         channel, err = await cog.open_ticket(interaction.guild, interaction.user, "support")
         if err == "blacklisted":
             await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
@@ -121,21 +112,19 @@ class SupportTicketModal(discord.ui.Modal):
             await interaction.followup.send("Failed to create ticket.", ephemeral=True)
             return
 
-        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        from cogs.tickets import get_cached_config, TicketButtons
+        cfg = await get_cached_config(str(interaction.guild_id))
         q1  = cfg.get("support_q1") or "What would you like help with?"
         q2  = cfg.get("support_q2") or "How urgent is this? (1-10)"
 
         embed = discord.Embed(title="🆘 Support Request", color=discord.Color.orange())
         embed.add_field(name="Opened by", value=interaction.user.mention, inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
+        embed.add_field(name="\u200b",    value="\u200b",                  inline=True)
+        embed.add_field(name="\u200b",    value="\u200b",                  inline=True)
         embed.add_field(name=q1, value=self.ans1.value, inline=False)
         embed.add_field(name=q2, value=self.ans2.value, inline=False)
         embed.set_footer(text=f"Submitted by {interaction.user}")
-
-        from cogs.tickets import TicketButtons
         await channel.send(embed=embed, view=TicketButtons())
-
         await interaction.followup.send(f"✅ Your support ticket has been created: {channel.mention}", ephemeral=True)
 
 
@@ -144,7 +133,6 @@ class PanelServiceSelectView(discord.ui.View):
         super().__init__(timeout=120)
         self.opener   = opener
         self.guild_id = guild_id
-
         select_options = [discord.SelectOption(label=opt[:100], value=opt[:100]) for opt in options]
         select = discord.ui.Select(placeholder="Choose a service…", options=select_options)
         select.callback = self._on_select
@@ -154,20 +142,16 @@ class PanelServiceSelectView(discord.ui.View):
         if interaction.user.id != self.opener.id:
             await interaction.response.send_message("Only you can select a service for your own ticket.", ephemeral=True)
             return
-
         selected   = interaction.data["values"][0]
         automm_cog = interaction.client.get_cog("AutoMM")
         if automm_cog:
             automm_cog._preselected_service[str(interaction.user.id)] = selected
-
         tickets_cog = interaction.client.get_cog("Tickets")
         if not tickets_cog:
             await interaction.response.edit_message(content="Ticket system unavailable.", embed=None, view=None)
             return
-
         await interaction.response.edit_message(content="⏳ Creating your ticket…", embed=None, view=None)
         channel, err = await tickets_cog.open_ticket(interaction.guild, interaction.user, "automm")
-
         if err == "blacklisted":
             await interaction.edit_original_response(content="You are blacklisted from opening tickets.")
         elif channel:
@@ -182,7 +166,8 @@ class OpenTradeTicketView(discord.ui.View):
 
     @discord.ui.button(label="Open Trade Ticket", style=discord.ButtonStyle.green, custom_id="panel_open_trade", emoji="🎫")
     async def open_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        from cogs.tickets import get_cached_config
+        cfg = await get_cached_config(str(interaction.guild_id))
         await interaction.response.send_modal(TradeTicketModal(interaction.guild_id, cfg))
 
 
@@ -192,7 +177,8 @@ class OpenSupportTicketView(discord.ui.View):
 
     @discord.ui.button(label="Open Support Ticket", style=discord.ButtonStyle.blurple, custom_id="panel_open_support", emoji="🆘")
     async def open_support(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cfg = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        from cogs.tickets import get_cached_config
+        cfg = await get_cached_config(str(interaction.guild_id))
         await interaction.response.send_modal(SupportTicketModal(interaction.guild_id, cfg))
 
 
@@ -207,12 +193,11 @@ class AutoMMView(discord.ui.View):
         if bl:
             await interaction.followup.send("You are blacklisted from opening tickets.", ephemeral=True)
             return
-
         from cogs.automm import _parse_dropdown_options
-        cfg            = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
+        from cogs.tickets import get_cached_config
+        cfg            = await get_cached_config(str(interaction.guild_id))
         dropdown_label = cfg.get("automm_dropdown_label") or "What service do you need?"
         options        = await asyncio.to_thread(_parse_dropdown_options, str(interaction.guild_id))
-
         embed = discord.Embed(
             title="🤖 Auto Middleman",
             description=f"**{dropdown_label}**\nSelect a service below to open your ticket.",
@@ -229,7 +214,8 @@ class Panels(commands.Cog):
         self.bot.add_view(AutoMMView())
 
     async def _make_embed(self, guild_id, cfg_prefix, default_title, default_desc):
-        cfg    = await asyncio.to_thread(db.get_all_config, str(guild_id))
+        from cogs.tickets import get_cached_config
+        cfg    = await get_cached_config(str(guild_id))
         title  = cfg.get(f"{cfg_prefix}_title")  or default_title
         desc   = cfg.get(f"{cfg_prefix}_desc")   or default_desc
         footer = cfg.get(f"{cfg_prefix}_footer", "")
