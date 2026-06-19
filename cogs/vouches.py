@@ -20,7 +20,7 @@ class Vouches(commands.Cog):
     @app_commands.describe(user="The user to vouch for", note="Optional note about the trade")
     async def vouch(self, interaction: discord.Interaction, user: discord.Member, note: str = ""):
         await interaction.response.defer(ephemeral=True)
-        from cogs.tickets import is_mm_or_admin
+        from cogs.tickets import is_mm_or_admin, get_cached_config
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only MM staff or higher can vouch.", ephemeral=True)
             return
@@ -30,10 +30,8 @@ class Vouches(commands.Cog):
         if user.bot:
             await interaction.followup.send("You cannot vouch for bots.", ephemeral=True)
             return
-
         recently = await asyncio.to_thread(
-            db.has_vouched_recently,
-            str(interaction.user.id), str(user.id), str(interaction.guild_id), 24
+            db.has_vouched_recently, str(interaction.user.id), str(user.id), str(interaction.guild_id), 24
         )
         if recently:
             await interaction.followup.send(
@@ -41,26 +39,22 @@ class Vouches(commands.Cog):
                 ephemeral=True
             )
             return
-
         await asyncio.to_thread(db.add_vouch, str(interaction.user.id), str(user.id), str(interaction.guild_id), note)
-        count = await asyncio.to_thread(db.count_vouches, str(user.id), str(interaction.guild_id))
-        cfg   = await asyncio.to_thread(db.get_all_config, str(interaction.guild_id))
-
+        count, cfg = await asyncio.gather(
+            asyncio.to_thread(db.count_vouches, str(user.id), str(interaction.guild_id)),
+            get_cached_config(str(interaction.guild_id))
+        )
         title  = cfg.get("vouch_title")  or "Vouch Added ⭐"
         footer = cfg.get("vouch_footer") or ""
         image  = cfg.get("vouch_image")  or ""
 
         embed = discord.Embed(title=title, color=discord.Color.yellow())
-        embed.add_field(name="Vouched For",   value=user.mention,               inline=True)
-        embed.add_field(name="By",            value=interaction.user.mention,    inline=True)
-        embed.add_field(name="Total Vouches", value=f"⭐ {count}",               inline=True)
-        if note:
-            embed.add_field(name="Note", value=note, inline=False)
-        if footer:
-            embed.set_footer(text=footer)
-        if image:
-            embed.set_image(url=image)
-
+        embed.add_field(name="Vouched For",   value=user.mention,            inline=True)
+        embed.add_field(name="By",            value=interaction.user.mention, inline=True)
+        embed.add_field(name="Total Vouches", value=f"⭐ {count}",            inline=True)
+        if note:   embed.add_field(name="Note", value=note, inline=False)
+        if footer: embed.set_footer(text=footer)
+        if image:  embed.set_image(url=image)
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="rep", description="Check a user's reputation/vouch count")
@@ -71,24 +65,19 @@ class Vouches(commands.Cog):
         if not await is_mm_or_admin(interaction.user):
             await interaction.followup.send("Only MM staff or higher can check reputation.", ephemeral=True)
             return
-
         target  = user or interaction.user
         vouches = await asyncio.to_thread(db.get_vouches, str(target.id), str(interaction.guild_id))
         count   = len(vouches)
-
-        embed = discord.Embed(title=f"Reputation — {target.display_name}", color=discord.Color.yellow())
+        embed   = discord.Embed(title=f"Reputation — {target.display_name}", color=discord.Color.yellow())
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.add_field(name="Total Vouches", value=f"⭐ {count}", inline=False)
-
         if vouches:
             lines = []
             for v in vouches[:5]:
                 from_name = _vouch_from_name(interaction.guild, v["from_user"])
                 note_part = f" — *{v['note']}*" if v.get("note") else ""
-                date      = v["created_at"][:10]
-                lines.append(f"{from_name}{note_part} `{date}`")
+                lines.append(f"{from_name}{note_part} `{v['created_at'][:10]}`")
             embed.add_field(name="Recent Vouches", value="\n".join(lines), inline=False)
-
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="setvouches", description="[Staff] Manually set a user's vouch count")
@@ -129,8 +118,7 @@ class Vouches(commands.Cog):
 
     @commands.command(name="vouch")
     async def vouch_prefix(self, ctx: commands.Context, user: discord.Member, *, note: str = ""):
-        """Vouch for a user after a trade. (MM or higher only)"""
-        from cogs.tickets import is_mm_or_admin
+        from cogs.tickets import is_mm_or_admin, get_cached_config
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff or higher can vouch.", delete_after=10)
             return
@@ -140,51 +128,42 @@ class Vouches(commands.Cog):
         if user.bot:
             await ctx.send("You cannot vouch for bots.", delete_after=10)
             return
-
         recently = await asyncio.to_thread(
             db.has_vouched_recently, str(ctx.author.id), str(user.id), str(ctx.guild.id), 24
         )
         if recently:
             await ctx.send("You have already vouched for this user in the last 24 hours.", delete_after=15)
             return
-
         await asyncio.to_thread(db.add_vouch, str(ctx.author.id), str(user.id), str(ctx.guild.id), note)
-        count = await asyncio.to_thread(db.count_vouches, str(user.id), str(ctx.guild.id))
-        cfg   = await asyncio.to_thread(db.get_all_config, str(ctx.guild.id))
-
+        count, cfg = await asyncio.gather(
+            asyncio.to_thread(db.count_vouches, str(user.id), str(ctx.guild.id)),
+            get_cached_config(str(ctx.guild.id))
+        )
         title  = cfg.get("vouch_title")  or "Vouch Added ⭐"
         footer = cfg.get("vouch_footer") or ""
         image  = cfg.get("vouch_image")  or ""
 
         embed = discord.Embed(title=title, color=discord.Color.yellow())
-        embed.add_field(name="Vouched For",   value=user.mention,       inline=True)
-        embed.add_field(name="By",            value=ctx.author.mention,  inline=True)
-        embed.add_field(name="Total Vouches", value=f"⭐ {count}",        inline=True)
-        if note:
-            embed.add_field(name="Note", value=note, inline=False)
-        if footer:
-            embed.set_footer(text=footer)
-        if image:
-            embed.set_image(url=image)
-
+        embed.add_field(name="Vouched For",   value=user.mention,      inline=True)
+        embed.add_field(name="By",            value=ctx.author.mention, inline=True)
+        embed.add_field(name="Total Vouches", value=f"⭐ {count}",      inline=True)
+        if note:   embed.add_field(name="Note", value=note, inline=False)
+        if footer: embed.set_footer(text=footer)
+        if image:  embed.set_image(url=image)
         await ctx.send(embed=embed)
 
     @commands.command(name="rep")
     async def rep_prefix(self, ctx: commands.Context, user: discord.Member = None):
-        """Check a user's reputation/vouch count. (MM or higher only)"""
         from cogs.tickets import is_mm_or_admin
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only MM staff or higher can check reputation.", delete_after=10)
             return
-
         target  = user or ctx.author
         vouches = await asyncio.to_thread(db.get_vouches, str(target.id), str(ctx.guild.id))
         count   = len(vouches)
-
-        embed = discord.Embed(title=f"Reputation — {target.display_name}", color=discord.Color.yellow())
+        embed   = discord.Embed(title=f"Reputation — {target.display_name}", color=discord.Color.yellow())
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.add_field(name="Total Vouches", value=f"⭐ {count}", inline=False)
-
         if vouches:
             lines = []
             for v in vouches[:5]:
@@ -192,12 +171,10 @@ class Vouches(commands.Cog):
                 note_part = f" — *{v['note']}*" if v.get("note") else ""
                 lines.append(f"{from_name}{note_part} `{v['created_at'][:10]}`")
             embed.add_field(name="Recent Vouches", value="\n".join(lines), inline=False)
-
         await ctx.send(embed=embed)
 
     @commands.command(name="setvouches")
     async def setvouches_prefix(self, ctx: commands.Context, user: discord.Member, count: int):
-        """[Staff] Manually set a user's vouch count."""
         from cogs.tickets import is_mm_or_admin
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only staff can set vouches.", delete_after=10)
@@ -214,7 +191,6 @@ class Vouches(commands.Cog):
 
     @commands.command(name="deletevouch")
     async def deletevouch_prefix(self, ctx: commands.Context, user: discord.Member, voucher: discord.Member):
-        """[Staff] Delete the latest vouch from one user to another."""
         from cogs.tickets import is_mm_or_admin
         if not await is_mm_or_admin(ctx.author):
             await ctx.send("Only staff can delete vouches.", delete_after=10)
