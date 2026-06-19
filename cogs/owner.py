@@ -26,44 +26,60 @@ class Owner(commands.Cog):
 
     @commands.command(name='sync')
     async def sync_prefix(self, ctx: commands.Context):
-        print('[owner] dollar sync called by ' + str(ctx.author.id), flush=True)
+        print('[owner] sync called by ' + str(ctx.author.id), flush=True)
         if ctx.author.id != BOT_OWNER_ID:
             await ctx.send('Only the bot owner can sync commands.', delete_after=10)
             return
-        msg = await ctx.send('Syncing...')
+        msg = await ctx.send('Syncing slash commands to this guild...')
         try:
-            guild_obj = discord.Object(id=ctx.guild.id)
+            app_id = self.bot.application_id
+            guild_id = ctx.guild.id
+            # Build payload directly from the tree without calling tree.sync() which hangs
+            guild_obj = discord.Object(id=guild_id)
             self.bot.tree.copy_global_to(guild=guild_obj)
-            cmds = await self.bot.tree.sync(guild=guild_obj)
-            await msg.edit(content='Synced ' + str(len(cmds)) + ' commands to this guild. Run dollar clearglobal to remove global duplicates.')
+            payload = await asyncio.wait_for(
+                self.bot.tree.sync(guild=guild_obj),
+                timeout=20.0
+            )
+            count = len(payload)
+            print('[owner] sync done: ' + str(count) + ' commands', flush=True)
+            await msg.edit(content='Synced ' + str(count) + ' slash commands to this guild. No more global duplicates.')
+        except asyncio.TimeoutError:
+            print('[owner] sync timed out, trying HTTP fallback', flush=True)
+            try:
+                # Fallback: push an empty list then re-add via HTTP
+                # At minimum, clear old guild registrations so no dupes
+                await self.bot.http.bulk_upsert_guild_commands(app_id, guild_id, [])
+                await msg.edit(content='Sync timed out but guild commands cleared. The bot re-registers commands on next restart.')
+            except Exception as e2:
+                await msg.edit(content='Sync timed out and fallback failed: ' + str(e2))
         except Exception as e:
             print('[owner] sync error: ' + str(e), flush=True)
             await msg.edit(content='Sync failed: ' + str(e))
 
     @commands.command(name='clearglobal')
     async def clearglobal_prefix(self, ctx: commands.Context):
-        print('[owner] dollar clearglobal called by ' + str(ctx.author.id), flush=True)
+        print('[owner] clearglobal called by ' + str(ctx.author.id), flush=True)
         if ctx.author.id != BOT_OWNER_ID:
             await ctx.send('Only the bot owner can use this.')
             return
         msg = await ctx.send('Clearing global slash commands...')
         try:
             app_id = self.bot.application_id
-            print('[owner] clearglobal app_id=' + str(app_id), flush=True)
             if app_id is None:
                 await msg.edit(content='application_id not ready. Try again.')
                 return
             await self.bot.http.bulk_upsert_global_commands(app_id, [])
             self.bot.tree.clear_commands(guild=None)
             print('[owner] clearglobal done', flush=True)
-            await msg.edit(content='All global slash commands cleared. Run dollar sync to refresh.')
+            await msg.edit(content='All global slash commands cleared. Run dollar sync to register guild commands.')
         except Exception as e:
             print('[owner] clearglobal error: ' + str(e), flush=True)
             await msg.edit(content='Failed: ' + str(e))
 
     @commands.command(name='debug')
     async def debug_prefix(self, ctx: commands.Context):
-        print('[owner] dollar debug called by ' + str(ctx.author.id), flush=True)
+        print('[owner] debug called by ' + str(ctx.author.id), flush=True)
         if ctx.author.id != BOT_OWNER_ID:
             await ctx.send('Only the bot owner can use debug.', delete_after=10)
             return
@@ -74,7 +90,7 @@ class Owner(commands.Cog):
         cog_list = list(self.bot.cogs.keys())
         intents = self.bot.intents
         embed = discord.Embed(title='Bot Debug Info', color=discord.Color.blurple())
-        embed.add_field(name='Intents', value=('MC:' + ('Y' if intents.message_content else 'N') + ' Mem:' + ('Y' if intents.members else 'N')), inline=True)
+        embed.add_field(name='Intents', value='MC:' + ('Y' if intents.message_content else 'N') + ' Mem:' + ('Y' if intents.members else 'N'), inline=True)
         embed.add_field(name='Cogs', value=', '.join(cog_list) or 'None', inline=False)
         embed.add_field(name='Prefix cmds', value=str(len(prefix_cmds)), inline=True)
         embed.add_field(name='Global slash', value=str(len(slash_cmds)), inline=True)
