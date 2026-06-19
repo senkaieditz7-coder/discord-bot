@@ -39,11 +39,9 @@ class Bot(commands.Bot):
                 print(f"[+] Loaded {cog}", flush=True)
             except Exception as e:
                 print(f"[!] Failed to load {cog}: {e}", flush=True)
-        try:
-            synced = await self.tree.sync()
-            print(f"[✓] Synced {len(synced)} slash commands globally.", flush=True)
-        except Exception as e:
-            print(f"[!] Failed to sync commands: {e}", flush=True)
+        # No global sync here — use $sync to register guild commands,
+        # and $clearglobal to wipe any leftover global commands.
+        print("[✓] Cogs loaded. Use $sync to register slash commands.", flush=True)
 
     async def on_ready(self):
         print(f"[✓] Logged in as {self.user} ({self.user.id})", flush=True)
@@ -63,7 +61,6 @@ class Bot(commands.Bot):
         await self.process_commands(message)
 
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
-        # Ignore unknown commands — user may have typed a non-bot $ message
         if isinstance(error, commands.CommandNotFound):
             return
         if isinstance(error, commands.MissingRequiredArgument):
@@ -78,7 +75,6 @@ class Bot(commands.Bot):
         if isinstance(error, commands.BotMissingPermissions):
             await ctx.send(f"I am missing permissions: {error.missing_permissions}", delete_after=10)
             return
-        # Log everything else so it shows up in Railway logs
         print(f"[!] Prefix command error — {ctx.command} in #{ctx.channel} by {ctx.author}: {error}", flush=True)
         try:
             await ctx.send(f"An error occurred: {error}", delete_after=20)
