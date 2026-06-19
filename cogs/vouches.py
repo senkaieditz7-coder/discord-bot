@@ -6,7 +6,6 @@ import db
 
 
 def _vouch_from_name(guild: discord.Guild, from_user: str) -> str:
-    """Safely resolve a from_user field — handles 'system' and other non-ID strings."""
     if from_user.isdigit():
         member = guild.get_member(int(from_user))
         return member.mention if member else f"<@{from_user}>"
@@ -20,11 +19,16 @@ class Vouches(commands.Cog):
     @app_commands.command(name="vouch", description="Vouch for a user after a trade")
     @app_commands.describe(user="The user to vouch for", note="Optional note about the trade")
     async def vouch(self, interaction: discord.Interaction, user: discord.Member, note: str = ""):
+        await interaction.response.defer(ephemeral=True)
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff or higher can vouch.", ephemeral=True)
+            return
         if user.id == interaction.user.id:
-            await interaction.response.send_message("You cannot vouch for yourself.", ephemeral=True)
+            await interaction.followup.send("You cannot vouch for yourself.", ephemeral=True)
             return
         if user.bot:
-            await interaction.response.send_message("You cannot vouch for bots.", ephemeral=True)
+            await interaction.followup.send("You cannot vouch for bots.", ephemeral=True)
             return
 
         recently = await asyncio.to_thread(
@@ -32,7 +36,7 @@ class Vouches(commands.Cog):
             str(interaction.user.id), str(user.id), str(interaction.guild_id), 24
         )
         if recently:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You have already vouched for this user in the last 24 hours. Spam protection is active.",
                 ephemeral=True
             )
@@ -57,33 +61,35 @@ class Vouches(commands.Cog):
         if image:
             embed.set_image(url=image)
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="rep", description="Check a user's reputation/vouch count")
     @app_commands.describe(user="The user to check")
     async def rep(self, interaction: discord.Interaction, user: discord.Member = None):
+        await interaction.response.defer(ephemeral=True)
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(interaction.user):
+            await interaction.followup.send("Only MM staff or higher can check reputation.", ephemeral=True)
+            return
+
         target  = user or interaction.user
         vouches = await asyncio.to_thread(db.get_vouches, str(target.id), str(interaction.guild_id))
         count   = len(vouches)
 
-        embed = discord.Embed(
-            title=f"Reputation — {target.display_name}",
-            color=discord.Color.yellow()
-        )
+        embed = discord.Embed(title=f"Reputation — {target.display_name}", color=discord.Color.yellow())
         embed.set_thumbnail(url=target.display_avatar.url)
         embed.add_field(name="Total Vouches", value=f"⭐ {count}", inline=False)
 
         if vouches:
-            recent = vouches[:5]
-            lines  = []
-            for v in recent:
+            lines = []
+            for v in vouches[:5]:
                 from_name = _vouch_from_name(interaction.guild, v["from_user"])
                 note_part = f" — *{v['note']}*" if v.get("note") else ""
                 date      = v["created_at"][:10]
                 lines.append(f"{from_name}{note_part} `{date}`")
             embed.add_field(name="Recent Vouches", value="\n".join(lines), inline=False)
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="setvouches", description="[Staff] Manually set a user's vouch count")
     @app_commands.describe(user="Target user", count="New vouch count")
@@ -97,12 +103,11 @@ class Vouches(commands.Cog):
             await interaction.followup.send("Count cannot be negative.", ephemeral=True)
             return
         await asyncio.to_thread(db.set_vouches, str(user.id), str(interaction.guild_id), count)
-        embed = discord.Embed(
+        await interaction.followup.send(embed=discord.Embed(
             title="Vouches Updated",
             description=f"Set {user.mention}'s vouches to **{count}**.",
             color=discord.Color.blurple()
-        )
-        await interaction.followup.send(embed=embed)
+        ))
 
     @app_commands.command(name="deletevouch", description="[Staff] Delete the latest vouch from one user to another")
     @app_commands.describe(user="The user whose vouch to delete", voucher="The user who gave the vouch")
@@ -116,10 +121,7 @@ class Vouches(commands.Cog):
             db.delete_latest_vouch, str(voucher.id), str(user.id), str(interaction.guild_id)
         )
         if deleted:
-            await interaction.followup.send(
-                f"Deleted the latest vouch from {voucher.mention} to {user.mention}.",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"Deleted the latest vouch from {voucher.mention} to {user.mention}.", ephemeral=True)
         else:
             await interaction.followup.send("No vouch found to delete.", ephemeral=True)
 
@@ -127,7 +129,11 @@ class Vouches(commands.Cog):
 
     @commands.command(name="vouch")
     async def vouch_prefix(self, ctx: commands.Context, user: discord.Member, *, note: str = ""):
-        """Vouch for a user after a trade."""
+        """Vouch for a user after a trade. (MM or higher only)"""
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff or higher can vouch.", delete_after=10)
+            return
         if user.id == ctx.author.id:
             await ctx.send("You cannot vouch for yourself.", delete_after=10)
             return
@@ -139,10 +145,7 @@ class Vouches(commands.Cog):
             db.has_vouched_recently, str(ctx.author.id), str(user.id), str(ctx.guild.id), 24
         )
         if recently:
-            await ctx.send(
-                "You have already vouched for this user in the last 24 hours. Spam protection is active.",
-                delete_after=15
-            )
+            await ctx.send("You have already vouched for this user in the last 24 hours.", delete_after=15)
             return
 
         await asyncio.to_thread(db.add_vouch, str(ctx.author.id), str(user.id), str(ctx.guild.id), note)
@@ -168,7 +171,12 @@ class Vouches(commands.Cog):
 
     @commands.command(name="rep")
     async def rep_prefix(self, ctx: commands.Context, user: discord.Member = None):
-        """Check a user's reputation/vouch count."""
+        """Check a user's reputation/vouch count. (MM or higher only)"""
+        from cogs.tickets import is_mm_or_admin
+        if not await is_mm_or_admin(ctx.author):
+            await ctx.send("Only MM staff or higher can check reputation.", delete_after=10)
+            return
+
         target  = user or ctx.author
         vouches = await asyncio.to_thread(db.get_vouches, str(target.id), str(ctx.guild.id))
         count   = len(vouches)
