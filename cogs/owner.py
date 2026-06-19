@@ -34,17 +34,18 @@ class Owner(commands.Cog):
             return
 
         msg = await ctx.send("⏳ Syncing slash commands to this guild…")
+        try:
+            guild_obj = discord.Object(id=ctx.guild.id)
+            self.bot.tree.copy_global_to(guild=guild_obj)
+            guild_cmds = await self.bot.tree.sync(guild=guild_obj)
+            await msg.edit(content=(
+                f"✅ Synced **{len(guild_cmds)}** commands to this guild instantly.\n"
+                f"💡 If you still see duplicates, run `$clearglobal` once to wipe globally-registered commands."
+            ))
+        except Exception as e:
+            await msg.edit(content=f"❌ Sync failed: {e}")
 
-        guild_obj = discord.Object(id=ctx.guild.id)
-        self.bot.tree.copy_global_to(guild=guild_obj)
-        guild_cmds = await self.bot.tree.sync(guild=guild_obj)
-
-        await msg.edit(content=(
-            f"✅ Synced **{len(guild_cmds)}** commands to this guild instantly.\n"
-            f"💡 If you still see duplicates, run `$clearglobal` once to wipe globally-registered commands."
-        ))
-
-    # ── $clearglobal — one-time fix for duplicate commands ───────────────────
+    # ── $clearglobal — wipe all global slash commands via HTTP directly ───────
     @commands.command(name="clearglobal")
     async def clearglobal_prefix(self, ctx: commands.Context):
         """[Owner] Clear all globally-registered slash commands. Fixes duplicate command lists."""
@@ -53,13 +54,24 @@ class Owner(commands.Cog):
             return
 
         msg = await ctx.send("⏳ Clearing global slash commands…")
-        self.bot.tree.clear_commands(guild=None)
-        cleared = await self.bot.tree.sync()
-        await msg.edit(content=(
-            f"✅ Global slash commands cleared ({len(cleared)} remaining globally).\n"
-            f"Commands are now **guild-only** — no more duplicates.\n"
-            f"Run `$sync` to make sure guild commands are up to date."
-        ))
+        try:
+            # Use HTTP directly — avoids tree.sync() hanging on global scope
+            app_id = self.bot.application_id
+            if app_id is None:
+                await msg.edit(content="❌ Bot application_id not available yet. Try again in a moment.")
+                return
+
+            await self.bot.http.bulk_upsert_global_commands(app_id, [])
+            # Clear local tree cache too
+            self.bot.tree.clear_commands(guild=None)
+
+            await msg.edit(content=(
+                "✅ All global slash commands cleared.\n"
+                "Commands are now **guild-only** — no more duplicates.\n"
+                "Run `$sync` to make sure guild commands are up to date."
+            ))
+        except Exception as e:
+            await msg.edit(content=f"❌ Failed to clear global commands: {e}")
 
     # ── $debug — show bot health at a glance ─────────────────────────────────
     @commands.command(name="debug")
