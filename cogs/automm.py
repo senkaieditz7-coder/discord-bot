@@ -76,7 +76,7 @@ class AutoMMDropdownView(discord.ui.View):
             color=discord.Color.green()
         )
         embed.set_footer(text=f"Auto Middleman — {bank}")
-        await interaction.message.edit(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
         mm_role_id = await asyncio.to_thread(db.get_config, str(interaction.guild_id), "mm_role")
         ping = f"<@&{mm_role_id}>" if mm_role_id else "@MM Staff"
@@ -189,7 +189,7 @@ class RoleSelectView(discord.ui.View):
             color=discord.Color.gold()
         )
         view = MethodSelectView(self.channel_id, sender, receiver)
-        await interaction.message.edit(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
     @discord.ui.button(label="I am Money Sender", style=discord.ButtonStyle.green, emoji="💸", row=0)
     async def be_sender(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -211,7 +211,7 @@ class RoleSelectView(discord.ui.View):
             return
         bank_name = await asyncio.to_thread(get_bank_name, interaction.guild_id)
         embed = self._make_status_embed(bank_name)
-        await interaction.message.edit(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(label="I am Money Receiver", style=discord.ButtonStyle.blurple, emoji="📥", row=0)
     async def be_receiver(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -233,7 +233,7 @@ class RoleSelectView(discord.ui.View):
             return
         bank_name = await asyncio.to_thread(get_bank_name, interaction.guild_id)
         embed = self._make_status_embed(bank_name)
-        await interaction.message.edit(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(label="Reset", style=discord.ButtonStyle.red, emoji="🔄", row=1)
     async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -248,7 +248,7 @@ class RoleSelectView(discord.ui.View):
         await asyncio.to_thread(db.update_automm_session, self.channel_id, sender_id=None, receiver_id=None)
         bank_name = await asyncio.to_thread(get_bank_name, interaction.guild_id)
         embed = self._make_status_embed(bank_name)
-        await interaction.message.edit(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
 
 
 # ── Payment Method Select View ────────────────────────────────────────────────
@@ -305,7 +305,7 @@ class MethodSelectView(discord.ui.View):
             color=discord.Color.green()
         )
         embed.set_footer(text=f"Auto Middleman — {bank}")
-        await interaction.message.edit(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
 
 
 # ── DM Confirmation View ──────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ class DMConfirmView(discord.ui.View):
         except Exception:
             pass
 
-        await interaction.message.edit(
+        await interaction.edit_original_response(
             content="✅ Confirmed! The ticket has been updated.",
             embed=None,
             view=None
