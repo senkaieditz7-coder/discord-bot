@@ -164,13 +164,26 @@ class RoleSelectView(discord.ui.View):
         session  = await asyncio.to_thread(db.get_automm_session, self.channel_id)
         sender   = interaction.guild.get_member(int(session["sender_id"]))
         receiver = interaction.guild.get_member(int(session["receiver_id"]))
+        # Fallback: fetch from API if not cached (no Members Intent yet)
+        if sender is None:
+            try:
+                sender = await interaction.guild.fetch_member(int(session["sender_id"]))
+            except Exception:
+                sender = None
+        if receiver is None:
+            try:
+                receiver = await interaction.guild.fetch_member(int(session["receiver_id"]))
+            except Exception:
+                receiver = None
+        sender_mention   = sender.mention   if sender   else f"<@{session['sender_id']}>"
+        receiver_mention = receiver.mention if receiver else f"<@{session['receiver_id']}>"
         bank     = await asyncio.to_thread(get_bank_name, interaction.guild_id)
 
         embed = discord.Embed(
             title=f"💳 Select Payment Method — {bank}",
             description=(
-                f"💸 **Sender:** {sender.mention}\n"
-                f"📥 **Receiver:** {receiver.mention}\n\n"
+                f"💸 **Sender:** {sender_mention}\n"
+                f"📥 **Receiver:** {receiver_mention}\n\n"
                 "Select the payment method for this trade:"
             ),
             color=discord.Color.gold()
@@ -278,12 +291,14 @@ class MethodSelectView(discord.ui.View):
 
         emoji = METHOD_EMOJIS.get(method, "💰")
         bank  = await asyncio.to_thread(get_bank_name, interaction.guild_id)
+        sender_mention   = self.sender.mention   if self.sender   else f"<@{session['sender_id']}>"
+        receiver_mention = self.receiver.mention if self.receiver else f"<@{session['receiver_id']}>"
 
         embed = discord.Embed(
             title=f"{emoji} Payment Method: {method}",
             description=(
-                f"💸 **Sender:** {self.sender.mention}\n"
-                f"📥 **Receiver:** {self.receiver.mention}\n"
+                f"💸 **Sender:** {sender_mention}\n"
+                f"📥 **Receiver:** {receiver_mention}\n"
                 f"💳 **Method:** {method}\n\n"
                 "✅ **Both traders: when you are ready to proceed, type `done` in this channel.**"
             ),
